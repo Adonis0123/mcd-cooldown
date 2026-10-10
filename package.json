@@ -1,0 +1,43 @@
+{
+  "name": "mcd-cooldown",
+  "version": "1.0.0",
+  "description": "额度用完先核价。放在编码助手和麦当劳 MCP 之间的本地网关。",
+  "type": "module",
+  "bin": {
+    "mcd-cooldown": "./dist/src/cli.js"
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE",
+    "CONTEST_DECLARATION.md",
+    "MCP_INTEGRATION.md",
+    "mcp-config.example.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "demo": "node dist/src/cli.js demo",
+    "doctor:mock": "node dist/src/cli.js doctor --mock"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adonis0123/mcd-cooldown.git"
+  },
+  "keywords": [
+    "mcp",
+    "mcdonalds",
+    "claude-code",
+    "statusline",
+    "cooldown"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
+  }
+}

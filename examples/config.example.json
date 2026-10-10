@@ -1,0 +1,38 @@
+{
+  "maxOrderCny": 80,
+  "dailyLimitCny": 150,
+  "maxItemQuantity": 12,
+  "maxUnpricedWrites": 8,
+  "pendingTtlMinutes": 480,
+  "quietStartHour": 23,
+  "quietEndHour": 6,
+  "quotaThreshold": 90,
+  "prepMinutes": 20,
+  "longSessionMinutes": 90,
+  "meals": {
+    "enabled": false,
+    "timezone": "Asia/Shanghai",
+    "weekends": false,
+    "lunch": "12:00",
+    "dinner": "18:30",
+    "prepMinutes": 20,
+    "lingerMinutes": 45,
+    "notify": false
+  },
+  "store": {
+    "storeCode": "YOUR_STORE_CODE",
+    "beCode": "YOUR_BE_CODE",
+    "beType": 1,
+    "orderType": 1,
+    "takeWayCode": "YOUR_TAKE_WAY_CODE"
+  },
+  "usual": {
+    "label": "常点一份",
+    "items": [
+      {
+        "productCode": "YOUR_PRODUCT_CODE",
+        "quantity": 1
+      }
+    ]
+  }
+}
