@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mcd-cooldown": {
+      "command": "npx",
+      "args": ["-y", "mcd-cooldown", "guard"],
+      "env": {
+        "MCD_MCP_TOKEN": "${MCD_MCP_TOKEN}",
+        "MCD_MCP_URL": "https://mcp.mcd.cn"
+      }
+    }
+  }
+}

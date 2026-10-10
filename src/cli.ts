@@ -1,0 +1,327 @@
+#!/usr/bin/env node
+import { existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { join } from "node:path";
+import { flagBool, flagString, parseArgs } from "./args.js";
+import { assertHomeOutside, exampleConfigText } from "./config.js";
+import { confirmPending, denyPending } from "./confirm.js";
+import { formatStatusline, preparePlan, rememberSession, runHook } from "./cooldown.js";
+import { dismissMeal, mealCommand, mealStatusFor, spawnDesktopNotify } from "./meals.js";
+import { renderDemo } from "./demo.js";
+import { runDoctor } from "./doctor.js";
+import { Guard } from "./guard.js";
+import { fixtureHttpHandler } from "./mcp/fixture-http.js";
+import { isRpcRequest, listenLoopback, readBody, sendJson } from "./mcp/http.js";
+import type { RpcRequest } from "./mcp/types.js";
+import { scrubForLog } from "./redact.js";
+import { loadContext, makeCaller } from "./runtime.js";
+import { serveStdio } from "./stdio-server.js";
+import { clockFromEnv } from "./time.js";
+import { UserError } from "./user-error.js";
+import { VERSION } from "./version.js";
+import { watchOrder } from "./watch.js";
+
+const HELP = `mcd-cooldown ${VERSION}
+额度用完，先核价。本地网关拦住写操作，确认后才提交。
+
+  mcd-cooldown doctor [--mock] [--city 城市 --keyword 关键词]
+  mcd-cooldown guard
+  mcd-cooldown serve [--port 39217]
+  mcd-cooldown plan [--mock]
+  mcd-cooldown statusline
+  mcd-cooldown hook [--no-prepare] [--mock]
+  mcd-cooldown confirm <请求号> [--allow-quiet] [--retry]
+  mcd-cooldown deny <请求号>
+  mcd-cooldown pending
+  mcd-cooldown log
+  mcd-cooldown watch <订单号>
+  mcd-cooldown meals on
+  mcd-cooldown meals lunch 12:00
+  mcd-cooldown meals dinner 18:30
+  mcd-cooldown meals weekends on
+  mcd-cooldown ate
+  mcd-cooldown later
+  mcd-cooldown skip
+  mcd-cooldown init
+  mcd-cooldown demo
+  mcd-cooldown mock [--port 39217]
+
+Token 只从环境变量 MCD_MCP_TOKEN 或本机 ~/.mcd-cooldown/token 读取。
+非麦当劳官方产品。默认只核价，不会自动下单。`;
+
+async function main(): Promise<void> {
+  const parsed = parseArgs(process.argv.slice(2));
+  if (flagBool(parsed.flags, "help") || parsed.command === "help") {
+    process.stdout.write(`${HELP}\n`);
+    return;
+  }
+  if (parsed.command === "version") {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+  if (parsed.command === "demo") {
+    process.stdout.write(`${renderDemo()}\n`);
+    return;
+  }
+  const env = process.env;
+  const ctx = loadContext(env);
+  if (parsed.command !== "mock") assertHomeOutside(ctx.home, process.cwd());
+  const now = () => clockFromEnv(env);
+
+  switch (parsed.command) {
+    case "init": {
+      ctx.store.ensure();
+      const file = join(ctx.home, "config.json");
+      if (existsSync(file)) throw new UserError(`配置已存在：${file}`);
+      let meals = flagBool(parsed.flags, "meals");
+      if (!meals && process.stdin.isTTY && process.stdout.isTTY) {
+        meals = await askYes("要在状态栏提醒午饭和晚饭吗？默认工作日 12:00 和 18:30，不弹窗，只核价。");
+      }
+      writeFileSync(file, exampleConfigText(meals), { mode: 0o600 });
+      const extra = meals
+        ? "饭点提醒已写入配置。周末默认关闭，需要的话再执行 mcd-cooldown meals weekends on\n"
+        : "写代码时想被提醒吃饭：mcd-cooldown meals on\n";
+      process.stdout.write(`已写入 ${file}\nToken 不要写进这个文件。请在本机执行 export MCD_MCP_TOKEN=...\n然后运行 mcd-cooldown doctor\n${extra}`);
+      return;
+    }
+    case "doctor": {
+      const mock = flagBool(parsed.flags, "mock");
+      const caller = makeCaller(ctx, mock);
+      const report = await runDoctor({
+        caller,
+        token: ctx.token,
+        tokenSource: ctx.tokenSource,
+        warnings: ctx.warnings,
+        config: ctx.config,
+        workspace: process.cwd(),
+        city: flagString(parsed.flags, "city"),
+        keyword: flagString(parsed.flags, "keyword"),
+        mock,
+      });
+      process.stdout.write(`${report.lines.join("\n")}\n`);
+      if (!report.ok) throw new UserError("doctor 未通过", 2);
+      return;
+    }
+    case "guard": {
+      if (process.stdin.isTTY) {
+        throw new UserError("guard 由 MCP 客户端通过标准输入启动，不要在交互终端里直接运行");
+      }
+      const caller = makeCaller(ctx, false);
+      const guard = new Guard({ caller, store: ctx.store, config: ctx.config, token: ctx.token, now });
+      await serveStdio(guard, ctx.token);
+      return;
+    }
+    case "serve":
+      await serveHttp(ctx, portOf(parsed.flags), false);
+      return;
+    case "mock":
+      await serveHttp(ctx, portOf(parsed.flags), true);
+      return;
+    case "plan": {
+      const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
+      const session = rememberSession(ctx.store, {}, now());
+      const plan = await preparePlan({ caller, store: ctx.store, config: ctx.config, now: now(), session });
+      process.stdout.write(`${plan.headline}\n${plan.hint}\n${plan.note}\n`);
+      return;
+    }
+    case "statusline": {
+      const raw = parseStdin(await readStdinText());
+      const session = rememberSession(ctx.store, raw, now());
+      const line = formatStatusline({
+        now: now(),
+        config: ctx.config,
+        session,
+        plan: ctx.store.readPlan(),
+        pickup: ctx.store.readPickup(),
+        pickupStaleMs: 120_000,
+        meal: mealStatusFor(now(), ctx.config, ctx.store),
+      });
+      process.stdout.write(`${line}\n`);
+      return;
+    }
+    case "hook": {
+      const raw = parseStdin(await readStdinText());
+      const mock = flagBool(parsed.flags, "mock");
+      const noPrepare = flagBool(parsed.flags, "no-prepare");
+      const caller = !noPrepare && (mock || flagBool(parsed.flags, "prepare") || ctx.token) ? makeCaller(ctx, mock) : null;
+      const text = await runHook({
+        raw,
+        caller,
+        store: ctx.store,
+        config: ctx.config,
+        now: now(),
+        prepare: caller != null,
+        notify: ctx.config.meals.notify ? spawnDesktopNotify : undefined,
+      });
+      if (text) process.stdout.write(`${text}\n`);
+      return;
+    }
+    case "confirm": {
+      const id = parsed.positionals[0];
+      if (!id) throw new UserError("用法：mcd-cooldown confirm <请求号>");
+      const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
+      const text = await confirmPending(ctx.store, caller, ctx.config, id, {
+        allowQuiet: flagBool(parsed.flags, "allow-quiet"),
+        retry: flagBool(parsed.flags, "retry"),
+        now: now(),
+        token: ctx.token,
+      });
+      process.stdout.write(`${text}\n`);
+      return;
+    }
+    case "deny": {
+      const id = parsed.positionals[0];
+      if (!id) throw new UserError("用法：mcd-cooldown deny <请求号>");
+      process.stdout.write(`${denyPending(ctx.store, id, now())}\n`);
+      return;
+    }
+    case "pending": {
+      const rows = ctx.store.listPending();
+      if (rows.length === 0) {
+        process.stdout.write("没有待确认请求。\n");
+        return;
+      }
+      for (const row of rows) {
+        const price = row.quoteCents == null ? "无核价" : `¥${(row.quoteCents / 100).toFixed(2)}`;
+        process.stdout.write(`${row.id}  ${row.status}  ${row.tool}  ${price}  到期 ${row.expiresAt}\n`);
+      }
+      return;
+    }
+    case "log": {
+      const events = ctx.store.readAudit().slice(-20);
+      if (events.length === 0) {
+        process.stdout.write("还没有调用记录。\n");
+        return;
+      }
+      for (const event of events) {
+        process.stdout.write(`${scrubForLog(JSON.stringify(event), ctx.token)}\n`);
+      }
+      return;
+    }
+    case "meals": {
+      const sub = parsed.positionals[0];
+      if (sub === "ate" || sub === "later" || sub === "skip") {
+        process.stdout.write(`${dismissMeal(ctx.store, ctx.config, now(), sub, parsed.positionals[1])}\n`);
+        return;
+      }
+      process.stdout.write(`${mealCommand(ctx.home, parsed.positionals)}\n`);
+      return;
+    }
+    case "ate":
+    case "later":
+    case "skip": {
+      process.stdout.write(`${dismissMeal(ctx.store, ctx.config, now(), parsed.command, parsed.positionals[0])}\n`);
+      return;
+    }
+    case "watch": {
+      const orderId = parsed.positionals[0] ?? ctx.store.readPickup()?.orderId;
+      if (!orderId) throw new UserError("用法：mcd-cooldown watch <订单号>");
+      const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
+      process.stdout.write(`${await watchOrder(caller, ctx.store, orderId, now())}\n`);
+      return;
+    }
+    default:
+      throw new UserError(`未知命令 ${parsed.command}\n\n${HELP}`);
+  }
+}
+
+function portOf(flags: Record<string, string | boolean>): number {
+  const host = flagString(flags, "host");
+  if (host && host !== "127.0.0.1" && host !== "localhost") {
+    throw new UserError("只监听 127.0.0.1，避免把网关暴露到局域网");
+  }
+  const raw = flagString(flags, "port") ?? "39217";
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new UserError("端口无效");
+  return port;
+}
+
+async function serveHttp(ctx: ReturnType<typeof loadContext>, port: number, mock: boolean): Promise<void> {
+  if (mock) {
+    const server = await listenLoopback(fixtureHttpHandler(), port);
+    process.stderr.write(`样例 MCP 监听 ${server.url}（不是麦当劳官方实时数据，只接受本机连接）\n`);
+    await new Promise<void>((resolve) => {
+      process.once("SIGINT", () => {
+        void server.close().then(() => resolve());
+      });
+    });
+    return;
+  }
+  const caller = makeCaller(ctx, false);
+  const guard = new Guard({
+    caller,
+    store: ctx.store,
+    config: ctx.config,
+    token: ctx.token,
+    now: () => clockFromEnv(process.env),
+  });
+  const server = await listenLoopback(async (req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(405, { Allow: "POST" });
+      res.end("mcd-cooldown 使用 POST");
+      return;
+    }
+    const raw = await readBody(req);
+    let message: unknown;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      sendJson(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "invalid json" } });
+      return;
+    }
+    if (!isRpcRequest(message)) {
+      sendJson(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
+      return;
+    }
+    const response = await guard.handle(message as RpcRequest);
+    if (!response) {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    sendJson(res, 200, response, "mcd-cooldown-local");
+  }, port);
+  process.stderr.write(`mcd-cooldown 监听 ${server.url}（仅本机，Token 不进入客户端配置）\n`);
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", () => {
+      void server.close().then(() => resolve());
+    });
+  });
+}
+
+async function readStdinText(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+function parseStdin(text: string): unknown {
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new UserError("标准输入不是 JSON");
+  }
+}
+
+function askYes(prompt: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(`${prompt} [Y/n] `, (answer) => {
+      rl.close();
+      const text = answer.trim().toLowerCase();
+      resolve(text === "" || text === "y" || text === "yes" || text === "是");
+    });
+  });
+}
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  const secret = process.env.MCD_MCP_TOKEN ?? null;
+  process.stderr.write(`${scrubForLog(message, secret)}\n`);
+  const code = error instanceof UserError ? error.exitCode : 1;
+  process.exit(code);
+});

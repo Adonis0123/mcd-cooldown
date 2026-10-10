@@ -1,0 +1,19 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node /ABSOLUTE/PATH/mcd-cooldown/dist/src/cli.js statusline",
+    "padding": 0
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABSOLUTE/PATH/mcd-cooldown/dist/src/cli.js hook"
+          }
+        ]
+      }
+    ]
+  }
+}

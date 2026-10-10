@@ -1,0 +1,11 @@
+node_modules/
+uploads/
+agent-tools/
+dist/
+.env
+.env.*
+*.log
+.DS_Store
+.mcd-cooldown/
+coverage/
+*.tsbuildinfo
