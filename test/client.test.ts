@@ -14,7 +14,7 @@ test("client speaks to the fixture over streamable http without putting the toke
     const token = "fixture-client-token";
     const client = new McpHttpClient({ url: server.url, token });
     const tools = await client.listTools();
-    assert.equal(tools.length, 33);
+    assert.equal(tools.length, 35);
     const result = await client.callTool("now-time-info", {});
     assert.match(result.content[0]?.text ?? "", /2026-10-10 21:20:00/);
     assert.ok(handler.observations.sessionHeaders >= 1);

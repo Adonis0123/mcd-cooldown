@@ -3,7 +3,7 @@ import type { AppConfig } from "./config.js";
 import { cnyToCents, moneyDecision } from "./money.js";
 import { businessFailed, textOf, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller, ToolResult } from "./mcp/types.js";
-import { extractOrderId, extractPickup, isTerminalStatus, quoteCreateOrder } from "./order-flow.js";
+import { extractOrderId, extractPickup, isTerminalStatus, orderArgsForUpstream, quoteCreateOrder } from "./order-flow.js";
 import { decideIntercept } from "./policy.js";
 import { scrubSecrets } from "./redact.js";
 import type { HomeStore, PendingAction } from "./store.js";
@@ -69,7 +69,8 @@ export async function confirmPending(
   store.writePending(confirming);
   let result: ToolResult;
   try {
-    result = await caller.callTool(pending.tool, pending.args);
+    const forwardArgs = pending.tool === "create-order" ? orderArgsForUpstream(pending.args) : pending.args;
+    result = await caller.callTool(pending.tool, forwardArgs);
   } catch (error) {
     store.writePending({ ...confirming, status: "pending" });
     const message = error instanceof Error ? error.message : String(error);

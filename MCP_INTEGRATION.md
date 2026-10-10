@@ -27,11 +27,11 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 
 ## 工具分类
 
-分类以官方仓库 [M-China/mcd-mcp-server](https://github.com/M-China/mcd-mcp-server) 列出的 33 个工具为准。运行时若官方增加了新工具，名称里带 create / cancel / bind / draw 等写入含义的，网关也会先拦住。
+分类以 2026-10-11 对 `https://mcp.mcd.cn` 的只读实测为准，当时共 35 个工具。官方仓库 [M-China/mcd-mcp-server](https://github.com/M-China/mcd-mcp-server) 较早列出的 33 个名字里，`query-partystore-date` 和 `query-partystore-session` 已改名为 `query-party-store-date`、`query-party-store-session`，并多了只读的 `query-promotions`（企业团餐满减满折，入参含 `storeCode`、`beCode`、`orderType=2`、`beType=6`）和 `query-survey-coupon`（按订单查满意度答卷和关联奖券，涉及个人订单，`doctor` 不会调用）。运行时若上游再增加工具，名称里带 create / cancel / bind / draw 等写入含义的，网关也会先拦住。`doctor` 会列出上游有、目录里没有的工具名。
 
 ### 只读，默认可转发
 
-`now-time-info`、`list-nutrition-foods`、`campaign-calendar`、`query-nearby-stores`、`delivery-query-stores`、`delivery-query-addresses`、`query-meal-assistance`、`query-meals`、`query-meal-detail`、`query-store-coupons`、`available-coupons`、`query-my-coupons`、`query-my-account`、`calculate-price`、`query-order`、`order-list`、`mall-points-products`、`mall-product-detail`、`mall-order-list`、`mall-order-detail`、`query-lottery-info`、`query-my-prizes`、`query-party-city`、`query-party-store`、`query-partystore-date`、`query-partystore-session`。
+`now-time-info`、`list-nutrition-foods`、`campaign-calendar`、`query-nearby-stores`、`delivery-query-stores`、`delivery-query-addresses`、`query-meal-assistance`、`query-meals`、`query-meal-detail`、`query-store-coupons`、`available-coupons`、`query-my-coupons`、`query-my-account`、`calculate-price`、`query-order`、`order-list`、`mall-points-products`、`mall-product-detail`、`mall-order-list`、`mall-order-detail`、`query-lottery-info`、`query-my-prizes`、`query-party-city`、`query-party-store`、`query-party-store-date`、`query-party-store-session`、`query-promotions`、`query-survey-coupon`。
 
 `calculate-price` 只核价，不创建订单。官方说明里，它的金额字段是以分为单位的整数。网关展示前会除以 100。
 
@@ -60,19 +60,19 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 3. `now-time-info`，参数 `{}`
 4. `campaign-calendar`，参数 `{}`
 5. `list-nutrition-foods`，参数 `{}`。只报告正文长度，不把营养全文打出来
-6. 只有同时传入 `--city` 和 `--keyword` 时，才调用 `query-nearby-stores`，参数为 `searchType: 2`、`beType: 1` 加上城市和关键词
+6. 只有同时传入 `--city` 和 `--keyword` 时，才调用 `query-nearby-stores`，参数为 `searchType: 2`、`beType: 1` 加上城市和关键词。门店列表在返回的 `data` 数组里。会写出每家的 `storeCode`、名称、是否营业和营业时间；到店自取没有 `beCode`。0 家门店时这一项不通过，并提示换关键词
 
-不会调用订单、地址簿、券包、积分、领券、抽奖、兑换或下单。
+不会调用订单、地址簿、券包、积分、领券、抽奖、兑换或下单。门店不营业时上游错误码 `600057` 会转成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。
 
 ### `plan`：按额度恢复时间准备一单核价
 
 1. 从 Claude Code 状态栏留下的本地记录里读取 5 小时或 7 天窗口的 `resets_at`
 2. 用北京时间把「额度恢复」倒推 `prepMinutes`（默认 20 分钟），得到建议确认时间。到店自取是为了让人起身活动一下
 3. 调用 `now-time-info`
-4. 若本机配置了门店和常点餐品，调用 `calculate-price`。参数来自配置里的 `storeCode`、`beCode`、`beType`、`orderType` 和 `items`
-5. 核价成功且未超限时，在本机写下一条 `create-order` 待确认请求。此时还没有调用 `create-order`
+4. 若本机配置了门店和常点餐品，调用 `calculate-price`。参数来自配置里的 `storeCode`、`beType`、`orderType` 和 `items`。`beCode` 只在得来速（5）、外送（2）和团餐（6）时附上；到店自取（1）不传
+5. 核价成功且未超限时，在本机写下一条 `create-order` 待确认请求。此时还没有调用 `create-order`。门店不营业（错误码 `600057`）时只说明原因，不生成待确认单
 
-23:00 到次日 06:00（北京时间）只保留核价，并提示先休息。这个时段确认必须额外加上 `--allow-quiet`。
+23:00 到次日 06:00（按配置时区，默认北京时间）只保留核价，不生成待确认单，并提示先休息。这个时段要生成待确认单或确认提交，都必须额外加上 `--allow-quiet`。
 
 没有配置常点餐品时，只提醒，不猜测餐品。
 

@@ -1,5 +1,5 @@
 import { CATALOG } from "../catalog.js";
-import { isRecord } from "../is.js";
+import { asNumber, isRecord } from "../is.js";
 import { businessFailed } from "./parse.js";
 import type { ToolCaller, ToolDefinition, ToolResult } from "./types.js";
 
@@ -9,8 +9,8 @@ export interface RecordedCall {
 }
 
 /**
- * 合成样例，形状对齐公开文档里的麦当劳 MCP 工具返回。
- * 这里没有真实账户、订单、地址或 Token，也不能当作官方实时数据。
+ * 合成样例。返回形状对齐 2026-10-11 对官方 MCP 的只读观察，
+ * 门店、餐品和价格都是示例，不是真实账户录制。
  */
 export class FixtureBackend implements ToolCaller {
   readonly calls: RecordedCall[] = [];
@@ -29,20 +29,17 @@ export class FixtureBackend implements ToolCaller {
   async callTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     this.calls.push({ name, args });
     const data = this.payload(name, args);
-    if (data && isRecord(data) && data.error === true) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: JSON.stringify({ success: false, code: 400, message: data.message ?? "样例服务拒绝了这次调用" }) }],
+    if (data && isRecord(data) && data.success === false) {
+      const body = {
+        success: false,
+        code: data.code ?? 400,
+        message: typeof data.message === "string" ? data.message : "样例服务拒绝了这次调用",
+        sample: true,
       };
+      return { structuredContent: body, content: [{ type: "text", text: JSON.stringify(body) }] };
     }
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ success: true, code: 200, message: "ok", data, sample: true }),
-        },
-      ],
-    };
+    const body = { success: true, code: 200, message: "ok", data, sample: true };
+    return { structuredContent: body, content: [{ type: "text", text: JSON.stringify(body) }] };
   }
 
   called(name: string): number {
@@ -63,28 +60,53 @@ export class FixtureBackend implements ToolCaller {
         return { markdown: "当月示例活动：程序员节门店互动（样例数据，不是实时活动）。" };
       case "list-nutrition-foods":
         return "name|kcal\n示例汉堡|500\n示例玉米杯|80\n";
-      case "query-nearby-stores":
-        return {
-          stores: [
-            {
-              storeName: "麦当劳示例餐厅",
-              storeCode: "SAMPLE-STORE",
-              beCode: "SAMPLE-BE",
-              address: "示例路 1 号（样例，不是真实门店）",
-            },
-          ],
+      case "query-nearby-stores": {
+        if (args.keyword === "无门店") return [];
+        const beType = asNumber(args.beType) ?? 1;
+        const store: Record<string, unknown> = {
+          storeName: "麦当劳示例餐厅",
+          storeCode: "SAMPLE-STORE",
+          address: "示例路 1 号（样例，不是真实门店）",
+          businessStatus: true,
+          businessStartTime: "00:00",
+          businessEndTime: "23:59",
+          distance: 100,
         };
+        if (beType === 2 || beType === 5 || beType === 6) store.beCode = "SAMPLE-BE";
+        return [store];
+      }
       case "query-meals":
-        return { items: [{ productCode: "SAMPLE-001", name: "示例套餐", price: "36.50" }] };
+        if (args.storeCode === "CLOSED-STORE") {
+          return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
+        }
+        return {
+          categories: [{ name: "人气热卖", meals: [{ code: "SAMPLE-001", tags: ["样例"] }] }],
+          meals: {
+            "SAMPLE-001": {
+              name: "示例套餐",
+              currentPrice: "36.50",
+              originalPrice: "36.50",
+              canWithOrder: false,
+            },
+          },
+        };
       case "calculate-price": {
+        if (args.storeCode === "CLOSED-STORE") {
+          return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
+        }
         const price = this.priceFor(args);
         const data: Record<string, unknown> = {
-          price,
+          productOriginalPrice: price,
           productPrice: price,
-          deliveryPrice: 0,
+          originalPrice: price,
+          discount: 0,
+          price,
+          productList: [
+            { productCode: "SAMPLE-001", productName: "示例套餐", quantity: 1, originalSubtotal: price, subtotal: price },
+          ],
           takeWayList: [
-            { takeWayCode: "1", name: "店内就餐" },
-            { takeWayCode: "2", name: "外带" },
+            { code: "eat-in", title: "堂食", subtitle: "店内用餐" },
+            { code: "locker-in", title: "外带" },
           ],
         };
         if (this.prepMinutes != null) data.expectMinutes = this.prepMinutes;

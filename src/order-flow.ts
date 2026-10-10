@@ -1,19 +1,26 @@
 import type { AppConfig } from "./config.js";
 import { asNumber, isRecord } from "./is.js";
-import { extractCents, formatYuanFromCents } from "./money.js";
+import { beCodeRequired, extractCents, formatYuanFromCents } from "./money.js";
 import { businessFailed, textOf, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
+
+export function orderArgsForUpstream(args: Record<string, unknown>): Record<string, unknown> {
+  const beType = asNumber(args.beType) ?? 1;
+  const next: Record<string, unknown> = { ...args };
+  if (!beCodeRequired(beType)) delete next.beCode;
+  return next;
+}
 
 export function calculatePriceArgs(args: Record<string, unknown>): Record<string, unknown> {
   const beType = asNumber(args.beType) ?? 1;
   const orderType = asNumber(args.orderType) ?? (beType === 2 || beType === 6 ? 2 : 1);
   const priceArgs: Record<string, unknown> = {
     storeCode: args.storeCode,
-    beCode: args.beCode,
     beType,
     orderType,
     items: args.items,
   };
+  if (beCodeRequired(beType) && args.beCode != null && args.beCode !== "") priceArgs.beCode = args.beCode;
   for (const key of ["reservationDate", "gmServiceCode", "addressId"]) {
     if (args[key] != null && args[key] !== "") priceArgs[key] = args[key];
   }
@@ -24,11 +31,11 @@ export function orderArgsFromConfig(config: AppConfig): Record<string, unknown> 
   if (!config.store || !config.usual || config.usual.items.length === 0) return null;
   const args: Record<string, unknown> = {
     storeCode: config.store.storeCode,
-    beCode: config.store.beCode,
     beType: config.store.beType,
     orderType: config.store.orderType,
     items: config.usual.items.map((item) => ({ productCode: item.productCode, quantity: item.quantity })),
   };
+  if (beCodeRequired(config.store.beType) && config.store.beCode) args.beCode = config.store.beCode;
   if (config.store.takeWayCode) args.takeWayCode = config.store.takeWayCode;
   if (config.store.addressId) args.addressId = config.store.addressId;
   if (config.store.gmServiceCode) args.gmServiceCode = config.store.gmServiceCode;

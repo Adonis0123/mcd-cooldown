@@ -71,6 +71,33 @@ test("create-order is quoted and held, then confirmed once", async () => {
   assert.match(again, /不再重复提交/);
   assert.equal(backend.called("create-order"), 1);
   assert.equal(store.readAudit().some((event) => JSON.stringify(event).includes("local-test-token")), false);
+  for (const call of backend.calls) {
+    if (call.name === "calculate-price" || call.name === "create-order") assert.equal("beCode" in call.args, false);
+  }
+});
+
+test("in-store create-order without beCode is held", async () => {
+  const { guard, backend, store } = context();
+  const response = await guard.handle({
+    jsonrpc: "2.0",
+    id: 8,
+    method: "tools/call",
+    params: {
+      name: "create-order",
+      arguments: {
+        storeCode: "SAMPLE-STORE",
+        beType: 1,
+        takeWayCode: "eat-in",
+        items: [{ productCode: "SAMPLE-001", quantity: 1 }],
+      },
+    },
+  });
+  const text = JSON.stringify(response);
+  assert.match(text, /未向麦当劳提交/);
+  assert.equal(text.includes("缺少 beCode"), false);
+  assert.equal(backend.called("create-order"), 0);
+  assert.equal(store.listPending().length, 1);
+  assert.equal("beCode" in (store.listPending()[0]?.args ?? {}), false);
 });
 
 test("a price above the limit never reaches create-order", async () => {

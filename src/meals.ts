@@ -59,6 +59,7 @@ export async function prepareMeal(input: {
   store: HomeStore;
   config: AppConfig;
   now: Date;
+  allowQuiet?: boolean;
 }): Promise<MealRecord | null> {
   const window = currentWindow(input.now, input.config, input.store);
   if (!window) return null;
@@ -100,7 +101,9 @@ export async function prepareMeal(input: {
       dailyLimitCents: cnyToCents(input.config.dailyLimitCny),
     });
     if (!limit.ok) record.note = limit.reason;
-    else {
+    else if (isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone) && !input.allowQuiet) {
+      record.note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 mcd-cooldown plan --allow-quiet。`;
+    } else {
       const pending = input.store.createPending({
         tool: "create-order",
         args,

@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isRecord } from "./is.js";
+import { beCodeRequired } from "./money.js";
 import { formatHm, isValidTimeZone, parseHm } from "./time.js";
 import { UserError } from "./user-error.js";
 
 export interface StoreConfig {
   storeCode: string;
-  beCode: string;
+  beCode?: string;
   beType: number;
   orderType: number;
   takeWayCode?: string;
@@ -191,8 +192,10 @@ function readStore(raw: Record<string, unknown>): StoreConfig | undefined {
   const beCode = stringField(raw.beCode);
   const beType = typeof raw.beType === "number" ? raw.beType : 1;
   const orderType = typeof raw.orderType === "number" ? raw.orderType : beType === 2 || beType === 6 ? 2 : 1;
-  if (!storeCode || !beCode) return undefined;
-  const store: StoreConfig = { storeCode, beCode, beType, orderType };
+  if (!storeCode) return undefined;
+  if (beCodeRequired(beType) && !beCode) return undefined;
+  const store: StoreConfig = { storeCode, beType, orderType };
+  if (beCode) store.beCode = beCode;
   const takeWayCode = stringField(raw.takeWayCode);
   const addressId = stringField(raw.addressId);
   const gmServiceCode = stringField(raw.gmServiceCode);
@@ -229,9 +232,10 @@ function overrideNumber(raw: string | undefined, apply: (value: number) => void)
 }
 
 export function placeholderConfig(config: AppConfig): boolean {
+  const beCode = config.store && beCodeRequired(config.store.beType) ? config.store.beCode : undefined;
   const values = [
     config.store?.storeCode,
-    config.store?.beCode,
+    beCode,
     config.store?.takeWayCode,
     ...(config.usual?.items.map((item) => item.productCode) ?? []),
   ];
@@ -241,10 +245,20 @@ export function placeholderConfig(config: AppConfig): boolean {
 export function assertHomeOutside(home: string, workspace: string): void {
   const root = resolve(workspace);
   const target = resolve(home);
-  if (target === root || target.startsWith(root + (isAbsolute(target) ? "/" : "/"))) {
-    if (target === root || target.startsWith(`${root}/`)) {
-      throw new UserError("MCD_HOME 不能放在项目目录里，避免 Token 和订单记录被提交");
-    }
+  if (root === resolve(homedir())) return;
+  if (!isGitCheckout(root)) return;
+  if (target === root || target.startsWith(`${root}/`)) {
+    throw new UserError("MCD_HOME 不能放在项目目录里，避免 Token 和订单记录被提交");
+  }
+}
+
+function isGitCheckout(start: string): boolean {
+  let current = resolve(start);
+  for (;;) {
+    if (existsSync(join(current, ".git"))) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
   }
 }
 
@@ -265,10 +279,9 @@ export function exampleConfigText(mealsEnabled = false): string {
       meals,
       store: {
         storeCode: "YOUR_STORE_CODE",
-        beCode: "YOUR_BE_CODE",
         beType: 1,
         orderType: 1,
-        takeWayCode: "YOUR_TAKE_WAY_CODE",
+        takeWayCode: "eat-in",
       },
       usual: {
         label: "常点一份",

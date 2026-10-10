@@ -93,6 +93,7 @@ export async function preparePlan(input: {
   config: AppConfig;
   now: Date;
   session: SessionSignals;
+  allowQuiet?: boolean;
 }): Promise<PlanState> {
   const primary = primaryWindow(input.session.windows);
   const schedule = describeSchedule(input.now, primary?.resetsAtMs ?? null, input.config);
@@ -124,7 +125,9 @@ export async function preparePlan(input: {
         dailyLimitCents: cnyToCents(input.config.dailyLimitCny),
       });
       if (!limit.ok) note = limit.reason;
-      else {
+      else if (isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone) && !input.allowQuiet) {
+        note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 mcd-cooldown plan --allow-quiet。`;
+      } else {
         const pending = input.store.createPending({
           tool: "create-order",
           args,
@@ -237,7 +240,10 @@ function hookText(config: AppConfig, now: Date, session: SessionSignals, plan: P
   const schedule = describeSchedule(now, primary?.resetsAtMs ?? null, config);
   const price = plan?.quoteCents != null ? `已按你保存的份量核价 ¥${formatYuanFromCents(plan.quoteCents)}，尚未下单。` : "这次没有生成核价。";
   if (schedule.quiet) {
-    return `已经比较晚了，建议先休息。${price}如果仍然要用餐，确认时需要加上 --allow-quiet。`;
+    const confirm = plan?.pendingId
+      ? `已有待确认单 ${plan.pendingId}，提交时需要加上 --allow-quiet。`
+      : "这个时段不生成待确认单。仍要准备请运行 mcd-cooldown plan --allow-quiet。";
+    return `已经比较晚了，建议先休息。${price}${confirm}`;
   }
   if (meal) {
     const mealPrice =

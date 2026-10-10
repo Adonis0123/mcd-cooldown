@@ -21,10 +21,9 @@
   },
   "store": {
     "storeCode": "YOUR_STORE_CODE",
-    "beCode": "YOUR_BE_CODE",
     "beType": 1,
     "orderType": 1,
-    "takeWayCode": "YOUR_TAKE_WAY_CODE"
+    "takeWayCode": "eat-in"
   },
   "usual": {
     "label": "常点一份",

@@ -60,9 +60,17 @@ export function totalQuantity(args: Record<string, unknown>): number | null {
   return sum;
 }
 
+/** 得来速 5、外送 2、团餐 6 才有 beCode。到店自取 1 不传。 */
+export function beCodeRequired(beType: number): boolean {
+  return beType === 2 || beType === 5 || beType === 6;
+}
+
 export function validateCreateOrder(args: Record<string, unknown>, maxItemQuantity: number): string | null {
+  const beType = asNumber(args.beType);
+  const required = ["storeCode", "beType", "items"];
+  if (beType != null && beCodeRequired(beType)) required.push("beCode");
   const missing: string[] = [];
-  for (const key of ["storeCode", "beCode", "beType", "items"]) {
+  for (const key of required) {
     if (args[key] == null || args[key] === "") missing.push(key);
   }
   if (missing.length > 0) {
@@ -83,7 +91,6 @@ export function validateCreateOrder(args: Record<string, unknown>, maxItemQuanti
   if (quantity > maxItemQuantity) {
     return `未下单。这份请求共 ${quantity} 份，超过单笔份数上限 ${maxItemQuantity}。网关没有转发。`;
   }
-  const beType = asNumber(args.beType);
   if (beType === 1 || beType === 5) {
     if (!asText(args.takeWayCode)) {
       return "未下单。到店取餐需要 takeWayCode。请先看 calculate-price 返回的 takeWayList，把用户选定的编码放进参数。网关没有转发。";

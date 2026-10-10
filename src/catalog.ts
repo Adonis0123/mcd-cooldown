@@ -4,7 +4,7 @@ export interface CatalogTool {
   effect: "read" | "write";
 }
 
-/** 官方 README 列出的 33 个工具。描述是网关自己的短说明，调用以运行时 schema 为准。 */
+/** 2026-10-11 对 https://mcp.mcd.cn 的只读实测，共 35 个工具。描述是网关自己的短说明，调用以运行时 schema 为准。 */
 export const CATALOG: readonly CatalogTool[] = [
   { name: "list-nutrition-foods", description: "读取餐品营养数据", effect: "read" },
   { name: "delivery-query-addresses", description: "读取已保存的配送地址", effect: "read" },
@@ -36,8 +36,10 @@ export const CATALOG: readonly CatalogTool[] = [
   { name: "mall-order-detail", description: "查询积分商城订单详情", effect: "read" },
   { name: "query-party-city", description: "查询主题活动城市", effect: "read" },
   { name: "query-party-store", description: "查询主题活动门店", effect: "read" },
-  { name: "query-partystore-date", description: "查询主题活动可预约日期", effect: "read" },
-  { name: "query-partystore-session", description: "查询主题活动可预约场次", effect: "read" },
+  { name: "query-party-store-date", description: "查询主题活动可预约日期", effect: "read" },
+  { name: "query-party-store-session", description: "查询主题活动可预约场次", effect: "read" },
+  { name: "query-promotions", description: "查询企业团餐满减满折规则", effect: "read" },
+  { name: "query-survey-coupon", description: "按订单查询满意度答卷和关联奖券", effect: "read" },
   { name: "party-order-create", description: "创建主题活动订单", effect: "write" },
 ];
 

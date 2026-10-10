@@ -4,7 +4,7 @@ import { isRecord } from "./is.js";
 import { cnyToCents, moneyDecision } from "./money.js";
 import { annotateTool, GUARD_INSTRUCTIONS, holdMessage, quietLabel } from "./messages.js";
 import { mealStatusFor } from "./meals.js";
-import { quoteCreateOrder } from "./order-flow.js";
+import { orderArgsForUpstream, quoteCreateOrder } from "./order-flow.js";
 import { toolMessage } from "./mcp/parse.js";
 import type { RpcRequest, RpcResponse, ToolCaller, ToolResult } from "./mcp/types.js";
 import { decideIntercept } from "./policy.js";
@@ -113,9 +113,10 @@ export class Guard {
         return toolMessage(reason, true);
       }
     }
+    const storedArgs = name === "create-order" ? orderArgsForUpstream(args) : args;
     const pending = this.deps.store.createPending({
       tool: name,
-      args,
+      args: storedArgs,
       quoteCents,
       now,
       ttlMinutes: this.deps.config.pendingTtlMinutes,
@@ -135,7 +136,7 @@ export class Guard {
         id: pending.id,
         priceNote,
         quiet,
-        keys: Object.keys(args),
+        keys: Object.keys(storedArgs),
         quietLabel: quietLabel(this.deps.config.quietStartHour, this.deps.config.quietEndHour),
       }),
       false,

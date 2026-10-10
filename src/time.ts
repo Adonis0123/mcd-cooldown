@@ -75,6 +75,16 @@ export function formatHm(hour: number, minute: number): string {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+export function formatZonedDateTime(date: Date, timeZone: string): string {
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = zonedParts(date, timeZone);
+  const second =
+    new Intl.DateTimeFormat("en-US", { timeZone, second: "2-digit", hourCycle: "h23" })
+      .formatToParts(date)
+      .find((part) => part.type === "second")?.value ?? "00";
+  return `${parts.ymd} ${parts.hm}:${second.padStart(2, "0")}`;
+}
+
 export function zonedInstant(year: number, month: number, day: number, hour: number, minute: number, timeZone: string): Date {
   let utc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   for (let i = 0; i < 3; i += 1) {
