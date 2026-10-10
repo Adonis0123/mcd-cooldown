@@ -13,6 +13,7 @@ import { Guard } from "./guard.js";
 import { fixtureHttpHandler } from "./mcp/fixture-http.js";
 import { isRpcRequest, listenLoopback, readBody, sendJson } from "./mcp/http.js";
 import type { RpcRequest } from "./mcp/types.js";
+import { formatAuditLine, formatPendingLine } from "./present.js";
 import { scrubForLog } from "./redact.js";
 import { loadContext, makeCaller } from "./runtime.js";
 import { serveStdio } from "./stdio-server.js";
@@ -27,7 +28,7 @@ const HELP = `mcd-cooldown ${VERSION}
   mcd-cooldown doctor [--mock] [--city 城市 --keyword 关键词]
   mcd-cooldown guard
   mcd-cooldown serve [--port 39217]
-  mcd-cooldown plan [--mock]
+  mcd-cooldown plan [--mock] [--allow-quiet]
   mcd-cooldown statusline
   mcd-cooldown hook [--no-prepare] [--mock]
   mcd-cooldown confirm <请求号> [--allow-quiet] [--retry]
@@ -120,7 +121,14 @@ async function main(): Promise<void> {
     case "plan": {
       const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
       const session = rememberSession(ctx.store, {}, now());
-      const plan = await preparePlan({ caller, store: ctx.store, config: ctx.config, now: now(), session });
+      const plan = await preparePlan({
+        caller,
+        store: ctx.store,
+        config: ctx.config,
+        now: now(),
+        session,
+        allowQuiet: flagBool(parsed.flags, "allow-quiet"),
+      });
       process.stdout.write(`${plan.headline}\n${plan.hint}\n${plan.note}\n`);
       return;
     }
@@ -182,8 +190,7 @@ async function main(): Promise<void> {
         return;
       }
       for (const row of rows) {
-        const price = row.quoteCents == null ? "无核价" : `¥${(row.quoteCents / 100).toFixed(2)}`;
-        process.stdout.write(`${row.id}  ${row.status}  ${row.tool}  ${price}  到期 ${row.expiresAt}\n`);
+        process.stdout.write(`${formatPendingLine(row, ctx.config.meals.timezone)}\n`);
       }
       return;
     }
@@ -194,7 +201,7 @@ async function main(): Promise<void> {
         return;
       }
       for (const event of events) {
-        process.stdout.write(`${scrubForLog(JSON.stringify(event), ctx.token)}\n`);
+        process.stdout.write(`${formatAuditLine(event, ctx.config.meals.timezone, ctx.token)}\n`);
       }
       return;
     }

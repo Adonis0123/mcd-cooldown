@@ -1,8 +1,8 @@
-import { toolEffect } from "./catalog.js";
+import { CATALOG, toolEffect } from "./catalog.js";
 import type { AppConfig } from "./config.js";
 import { asText, isRecord } from "./is.js";
 import { findTokenInTree } from "./leak.js";
-import { payloadRecord, textOf, unwrapPayload } from "./mcp/parse.js";
+import { businessFailed, payloadRecord, textOf, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
 import { scrubForLog } from "./redact.js";
 import { UpstreamError } from "./mcp/client.js";
@@ -63,6 +63,9 @@ export async function runDoctor(input: DoctorInput): Promise<DoctorReport> {
     return { ok: false, lines, called };
   }
   lines.push(`工具 ${tools.length} 个：${tools.map((tool) => tool.name).join(", ")}`);
+  const known = new Set(CATALOG.map((tool) => tool.name));
+  const extra = tools.map((tool) => tool.name).filter((name) => name !== "cooldown-status" && !known.has(name));
+  if (extra.length > 0) lines.push(`上游有、目录里没有的工具：${extra.join(", ")}`);
   const writes = tools.map((tool) => tool.name).filter((name) => toolEffect(name) === "write");
   lines.push(`其中写工具 ${writes.length} 个，doctor 不会调用：${writes.join(", ") || "无"}`);
 
@@ -107,17 +110,72 @@ async function callRead(
     const result = await input.caller.callTool(name, args);
     called.push(name);
     if (result.isError) return { ok: false, line: `${name}：上游返回错误` };
+    const payload = unwrapPayload(result);
+    const failed = businessFailed(payload);
+    if (failed) return { ok: false, line: `${name}：${clip(failed, input.token)}` };
+    if (name === "query-nearby-stores") {
+      const summary = formatStores(extractStores(payload));
+      return { ok: summary.ok, line: `${name}：${clip(summary.text, input.token, 800)}` };
+    }
     return { ok: true, line: `${name}：${summarize(name, result, input.token)}` };
   } catch (error) {
     return { ok: false, line: `${name}：${failLine(error, input.token)}` };
   }
 }
 
+export interface StoreHit {
+  storeCode: string;
+  storeName: string;
+  beCode: string | null;
+  businessStatus: boolean | null;
+  businessStartTime: string | null;
+  businessEndTime: string | null;
+}
+
+export function extractStores(payload: unknown): StoreHit[] {
+  return storeList(payload).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    return [
+      {
+        storeCode: asText(item.storeCode) ?? "",
+        storeName: asText(item.storeName) ?? asText(item.name) ?? "未命名门店",
+        beCode: asText(item.beCode),
+        businessStatus: typeof item.businessStatus === "boolean" ? item.businessStatus : null,
+        businessStartTime: asText(item.businessStartTime),
+        businessEndTime: asText(item.businessEndTime),
+      },
+    ];
+  });
+}
+
+function storeList(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!isRecord(payload)) return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  const data = isRecord(payload.data) ? payload.data : payload;
+  if (Array.isArray(data.stores)) return data.stores;
+  if (Array.isArray(data.list)) return data.list;
+  if (Array.isArray(payload.stores)) return payload.stores;
+  if (Array.isArray(payload.list)) return payload.list;
+  return [];
+}
+
+function formatStores(stores: StoreHit[]): { ok: boolean; text: string } {
+  if (stores.length === 0) return { ok: false, text: "0 家门店。换一个城市或关键词再试。" };
+  const parts = stores.map((store) => {
+    const status = store.businessStatus === true ? "营业中" : store.businessStatus === false ? "未营业" : "营业状态未知";
+    const hours = store.businessStartTime && store.businessEndTime ? ` ${store.businessStartTime}-${store.businessEndTime}` : "";
+    const be = store.beCode ? ` beCode ${store.beCode}` : "";
+    return `${store.storeName} ${store.storeCode}${be} ${status}${hours}`.trim();
+  });
+  return { ok: true, text: `${stores.length} 家：${parts.join("；")}` };
+}
+
 function summarize(name: string, result: Parameters<typeof textOf>[0], token: string | null): string {
   const payload = unwrapPayload(result);
   const data = payloadRecord(payload);
   if (name === "list-nutrition-foods") {
-    const text = typeof payload === "string" ? payload : textOf(result);
+    const text = nutritionText(payload, result);
     return `已返回，正文长度 ${text.length} 字符（不打印正文）`;
   }
   if (name === "now-time-info") {
@@ -127,19 +185,17 @@ function summarize(name: string, result: Parameters<typeof textOf>[0], token: st
     const text = asText(data.markdown) ?? asText(data.content) ?? (typeof payload === "string" ? payload : textOf(result));
     return clip(text.split(/\r?\n/)[0] ?? text, token);
   }
-  if (name === "query-nearby-stores") {
-    const stores = Array.isArray(data.stores) ? data.stores : Array.isArray(data.list) ? data.list : [];
-    const first = stores.find(isRecord);
-    const storeName = first ? asText(first.storeName) ?? asText(first.name) ?? "未命名门店" : "没有门店";
-    const storeCode = first ? asText(first.storeCode) ?? "" : "";
-    const beCode = first ? asText(first.beCode) ?? "" : "";
-    return clip(`${stores.length} 家，第一家 ${storeName} ${storeCode} ${beCode}`.trim(), token);
-  }
   return "已返回";
 }
 
-function clip(text: string, token: string | null): string {
-  return scrubForLog(text.replace(/\s+/g, " ").trim(), token).slice(0, 120);
+function nutritionText(payload: unknown, result: Parameters<typeof textOf>[0]): string {
+  if (typeof payload === "string") return payload;
+  if (isRecord(payload) && typeof payload.data === "string") return payload.data;
+  return textOf(result);
+}
+
+function clip(text: string, token: string | null, limit = 120): string {
+  return scrubForLog(text.replace(/\s+/g, " ").trim(), token).slice(0, limit);
 }
 
 function failLine(error: unknown, token: string | null): string {
