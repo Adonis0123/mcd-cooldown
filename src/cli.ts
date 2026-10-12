@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
-import { flagBool, flagString, parseArgs } from "./args.js";
-import { assertHomeOutside, exampleConfigText } from "./config.js";
+import { flagBool, flagList, flagString, parseArgs, type FlagMap } from "./args.js";
+import { applyClaudeSetup } from "./claude-setup.js";
+import { assertHomeOutside } from "./config.js";
+import { assertConfigHidesToken, formatInitSummary, runInit } from "./init-config.js";
 import { confirmPending, denyPending } from "./confirm.js";
 import { formatStatusline, preparePlan, rememberSession, runHook } from "./cooldown.js";
 import { dismissMeal, mealCommand, mealStatusFor, spawnDesktopNotify } from "./meals.js";
@@ -43,11 +46,13 @@ const HELP = `mcd-cooldown ${VERSION}
   mcd-cooldown ate
   mcd-cooldown later
   mcd-cooldown skip
-  mcd-cooldown init
+  mcd-cooldown init [--mock] [--meals] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
+  mcd-cooldown setup claude [--print | --dry-run]
   mcd-cooldown demo
   mcd-cooldown mock [--port 39217]
 
 Token 只从环境变量 MCD_MCP_TOKEN 或本机 ~/.mcd-cooldown/token 读取。
+init 只读查询门店和菜单，不会下单。
 非麦当劳官方产品。默认只核价，不会自动下单。`;
 
 async function main(): Promise<void> {
@@ -74,15 +79,52 @@ async function main(): Promise<void> {
       ctx.store.ensure();
       const file = join(ctx.home, "config.json");
       if (existsSync(file)) throw new UserError(`配置已存在：${file}`);
-      let meals = flagBool(parsed.flags, "meals");
-      if (!meals && process.stdin.isTTY && process.stdout.isTTY) {
-        meals = await askYes("要在状态栏提醒午饭和晚饭吗？默认工作日 12:00 和 18:30，不弹窗，只核价。");
+      const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+      const city = flagString(parsed.flags, "city");
+      const keyword = flagString(parsed.flags, "keyword");
+      const storePick = flagString(parsed.flags, "store");
+      const itemPicks = flagList(parsed.flags, "item");
+      const mealsFlag = flagBool(parsed.flags, "meals");
+      const guided = interactive || Boolean(city?.trim() || keyword?.trim() || storePick?.trim() || itemPicks.length > 0);
+      if (!guided) {
+        throw new UserError(
+          "交互终端里运行 mcd-cooldown init，按编号选择门店和常点餐品。\n非交互环境：mcd-cooldown init --city 城市 --keyword 关键词 --store 门店 --item 餐品编码\n没有写入配置。",
+        );
       }
-      writeFileSync(file, exampleConfigText(meals), { mode: 0o600 });
-      const extra = meals
-        ? "饭点提醒已写入配置。周末默认关闭，需要的话再执行 mcd-cooldown meals weekends on\n"
-        : "写代码时想被提醒吃饭：mcd-cooldown meals on\n";
-      process.stdout.write(`已写入 ${file}\nToken 不要写进这个文件。请在本机执行 export MCD_MCP_TOKEN=...\n然后运行 mcd-cooldown doctor\n${extra}`);
+      const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
+      const prompter = interactive ? openPrompter() : undefined;
+      const scrub = (text: string) => scrubForLog(text, ctx.token);
+      try {
+        const result = await runInit({
+          caller,
+          city,
+          keyword,
+          store: storePick,
+          items: itemPicks,
+          mealsEnabled: mealsFlag,
+          askMeals: interactive && !mealsFlag,
+          interactive,
+          prompter,
+          emit: (line) => process.stdout.write(`${scrub(line)}\n`),
+        });
+        assertConfigHidesToken(result.configText, ctx.token);
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, result.configText, { mode: 0o600 });
+        renameSync(tmp, file);
+        process.stdout.write(`${scrub(formatInitSummary(file, result))}\n`);
+      } finally {
+        prompter?.close();
+      }
+      return;
+    }
+    case "setup": {
+      if (parsed.positionals[0] !== "claude" || parsed.positionals.length > 1) {
+        throw new UserError("用法：mcd-cooldown setup claude [--print]");
+      }
+      const dryRun = flagBool(parsed.flags, "print") || flagBool(parsed.flags, "dry-run");
+      const settingsPath = flagString(parsed.flags, "settings") ?? join(homedir(), ".claude", "settings.json");
+      const result = applyClaudeSetup({ settingsPath, dryRun });
+      process.stdout.write(dryRun ? result.json : `${result.message}\n`);
       return;
     }
     case "doctor": {
@@ -232,7 +274,7 @@ async function main(): Promise<void> {
   }
 }
 
-function portOf(flags: Record<string, string | boolean>): number {
+function portOf(flags: FlagMap): number {
   const host = flagString(flags, "host");
   if (host && host !== "127.0.0.1" && host !== "localhost") {
     throw new UserError("只监听 127.0.0.1，避免把网关暴露到局域网");
@@ -314,15 +356,15 @@ function parseStdin(text: string): unknown {
   }
 }
 
-function askYes(prompt: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`${prompt} [Y/n] `, (answer) => {
-      rl.close();
-      const text = answer.trim().toLowerCase();
-      resolve(text === "" || text === "y" || text === "yes" || text === "是");
-    });
-  });
+function openPrompter(): { ask(prompt: string): Promise<string>; close(): void } {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return {
+    ask: (prompt) =>
+      new Promise((resolve) => {
+        rl.question(prompt, (answer) => resolve(answer));
+      }),
+    close: () => rl.close(),
+  };
 }
 
 main().catch((error: unknown) => {

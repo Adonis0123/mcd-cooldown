@@ -1,13 +1,17 @@
-const VALUE_FLAGS = new Set(["port", "city", "keyword", "host"]);
+const VALUE_FLAGS = new Set(["port", "city", "keyword", "host", "store", "settings"]);
+const MULTI_FLAGS = new Set(["item"]);
+
+export type FlagValue = string | boolean | string[];
+export type FlagMap = Record<string, FlagValue>;
 
 export interface ParsedArgs {
   command: string;
   positionals: string[];
-  flags: Record<string, string | boolean>;
+  flags: FlagMap;
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
-  const flags: Record<string, string | boolean> = {};
+  const flags: FlagMap = {};
   const positionals: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";
@@ -22,15 +26,19 @@ export function parseArgs(argv: string[]): ParsedArgs {
     const body = arg.slice(2);
     const eq = body.indexOf("=");
     if (eq >= 0) {
-      flags[body.slice(0, eq)] = body.slice(eq + 1);
+      const key = body.slice(0, eq);
+      const value = body.slice(eq + 1);
+      if (MULTI_FLAGS.has(key)) pushMulti(flags, key, value);
+      else flags[key] = value;
       continue;
     }
-    if (VALUE_FLAGS.has(body)) {
+    if (VALUE_FLAGS.has(body) || MULTI_FLAGS.has(body)) {
       const next = argv[i + 1];
       if (next == null || next.startsWith("--")) {
         throw new Error(`--${body} 需要一个值`);
       }
-      flags[body] = next;
+      if (MULTI_FLAGS.has(body)) pushMulti(flags, body, next);
+      else flags[body] = next;
       i += 1;
       continue;
     }
@@ -39,11 +47,27 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { command: positionals[0] ?? "help", positionals: positionals.slice(1), flags };
 }
 
-export function flagString(flags: Record<string, string | boolean>, name: string): string | undefined {
-  const value = flags[name];
-  return typeof value === "string" ? value : undefined;
+function pushMulti(flags: FlagMap, key: string, value: string): void {
+  const current = flags[key];
+  const list = Array.isArray(current) ? current : [];
+  list.push(value);
+  flags[key] = list;
 }
 
-export function flagBool(flags: Record<string, string | boolean>, name: string): boolean {
+export function flagString(flags: FlagMap, name: string): string | undefined {
+  const value = flags[name];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value[0];
+  return undefined;
+}
+
+export function flagList(flags: FlagMap, name: string): string[] {
+  const value = flags[name];
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim()) return [value];
+  return [];
+}
+
+export function flagBool(flags: FlagMap, name: string): boolean {
   return flags[name] === true || flags[name] === "true";
 }

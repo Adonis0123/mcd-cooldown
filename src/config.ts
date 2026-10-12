@@ -270,25 +270,33 @@ export function modifyConfig(home: string, change: (config: AppConfig) => void):
   return config;
 }
 
-export function exampleConfigText(mealsEnabled = false): string {
+export function filledConfigText(input: { mealsEnabled?: boolean; store: StoreConfig; usual: UsualConfig }): string {
   const meals = defaultMeals();
-  meals.enabled = mealsEnabled;
+  meals.enabled = input.mealsEnabled === true;
   return `${JSON.stringify(
     {
       ...defaultConfig(),
       meals,
-      store: {
-        storeCode: "YOUR_STORE_CODE",
-        beType: 1,
-        orderType: 1,
-        takeWayCode: "eat-in",
-      },
-      usual: {
-        label: "常点一份",
-        items: [{ productCode: "YOUR_PRODUCT_CODE", quantity: 1 }],
-      },
+      store: input.store,
+      usual: input.usual,
     },
     null,
     2,
   )}\n`;
+}
+
+export function exampleConfigText(mealsEnabled = false): string {
+  return filledConfigText({
+    mealsEnabled,
+    store: {
+      storeCode: "YOUR_STORE_CODE",
+      beType: 1,
+      orderType: 1,
+      takeWayCode: "eat-in",
+    },
+    usual: {
+      label: "常点一份",
+      items: [{ productCode: "YOUR_PRODUCT_CODE", quantity: 1 }],
+    },
+  });
 }

@@ -126,6 +126,7 @@ async function callRead(
 export interface StoreHit {
   storeCode: string;
   storeName: string;
+  address: string | null;
   beCode: string | null;
   businessStatus: boolean | null;
   businessStartTime: string | null;
@@ -139,6 +140,7 @@ export function extractStores(payload: unknown): StoreHit[] {
       {
         storeCode: asText(item.storeCode) ?? "",
         storeName: asText(item.storeName) ?? asText(item.name) ?? "未命名门店",
+        address: asText(item.address),
         beCode: asText(item.beCode),
         businessStatus: typeof item.businessStatus === "boolean" ? item.businessStatus : null,
         businessStartTime: asText(item.businessStartTime),
