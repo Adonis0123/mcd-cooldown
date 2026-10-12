@@ -21,7 +21,7 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 ## 两层调用
 
 1. **透传。** `mcd-cooldown guard` / `serve` 把客户端的 `tools/list` 和只读 `tools/call` 转发给官方服务，并把官方 schema 原样交给客户端。写工具的描述会被加上拦截说明。
-2. **程序自己发起的调用。** `doctor`、`plan`、`confirm`、`watch` 使用同一套客户端，按下面的流程调用。
+2. **程序自己发起的调用。** `init`、`doctor`、`plan`、`confirm`、`watch` 使用同一套客户端，按下面的流程调用。`setup claude` 不调用麦当劳，只改本机 `~/.claude/settings.json`。
 
 写工具默认不转发。本机执行 `mcd-cooldown confirm <请求号>` 之后才会转发一次。重复确认不会再次提交。
 
@@ -63,6 +63,15 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 6. 只有同时传入 `--city` 和 `--keyword` 时，才调用 `query-nearby-stores`，参数为 `searchType: 2`、`beType: 1` 加上城市和关键词。门店列表在返回的 `data` 数组里。会写出每家的 `storeCode`、名称、是否营业和营业时间；到店自取没有 `beCode`。0 家门店时这一项不通过，并提示换关键词
 
 不会调用订单、地址簿、券包、积分、领券、抽奖、兑换或下单。门店不营业时上游错误码 `600057` 会转成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。
+
+### `init`：写入门店和常点餐品
+
+交互终端里询问城市、关键词、门店序号和常点餐品；非交互环境使用 `--city`、`--keyword`、`--store`、`--item`。只调用：
+
+1. `query-nearby-stores`，参数 `searchType: 2`、`beType: 1`、`city`、`keyword`
+2. `query-meals`，参数 `storeCode`、`beType: 1`、`orderType: 1`。到店自取不传 `beCode`
+
+不调用 `calculate-price`、`create-order` 或其他写工具。选中的门店和餐品编码写入本机 `config.json`。
 
 ### `plan`：按额度恢复时间准备一单核价
 

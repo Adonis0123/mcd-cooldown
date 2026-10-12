@@ -19,23 +19,39 @@ Claude Code、Codex 或 Cursor 的额度见底，或者写到了午饭晚饭，�
 非麦当劳官方产品 · 默认只核价 · 确认后才下单
 ```
 
-## 30 秒看懂
+## 三步开始
+
+1. 安装。`npm install` 会跑 `prepare`，编译出 `dist/src/cli.js`。
 
 ```bash
-git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install && node dist/src/cli.js demo && node dist/src/cli.js doctor --mock
+git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install
 ```
 
-`demo` 是离线预览。`doctor --mock` 走样例服务，只做只读调用，不会下单。样例门店和价格不是官方实时数据。
-
-有 Token 之后，把下面这一行留在本机终端，不要写进仓库：
+2. Token 只留在本机终端。不要写进仓库，也不要贴进对话。
 
 ```bash
-export MCD_MCP_TOKEN="从 open.mcd.cn 复制的 Token" && node dist/src/cli.js doctor
+export MCD_MCP_TOKEN="从 open.mcd.cn 复制的 Token"
 ```
 
-`doctor` 会检查 Token 是否泄漏到项目文件，然后连接 `https://mcp.mcd.cn`，列出工具，并只读查询当前时间、活动日历和营养数据长度。它不查订单、不领券、不抽奖、不下单。
+3. 选门店和常点的餐，并接到 Claude Code。
 
-想顺手看附近门店时再加参数，例如 `--city 上海 --keyword 南京西路`。到店自取（`beType` 为 1）没有 `beCode`，把 `storeCode` 抄进本机配置即可。`beCode` 只有得来速（`beType` 为 5）和外送（`beType` 为 2）才会返回；企业团餐（`beType` 为 6）同样需要。这三种之外不要传 `beCode`。查到 0 家门店时，`doctor` 会告警并建议换关键词，而不是报通过。门店不在营业时间时，上游错误码 `600057` 会说成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。
+```bash
+node dist/src/cli.js init && node dist/src/cli.js setup claude
+```
+
+`init` 在交互终端里问城市和关键词，用只读的 `query-nearby-stores` 列出门店，你输入序号选定；再用只读的 `query-meals` 列出这家店的菜单，你选常点的几项。配置写入 `~/.mcd-cooldown/config.json`。接着问要不要在状态栏提醒午饭和晚饭，默认工作日 12:00 和 18:30。这一步不下单。
+
+没有交互终端时，把选择写在参数里。`--store` 和 `--item` 先按编码匹配，对不上再按打印出来的序号。`--item` 可以重复。只给了城市和关键词时，会先打出编号列表，不写配置。
+
+```bash
+node dist/src/cli.js init --city 上海 --keyword 南京西路 --store 门店编码 --item 餐品编码
+```
+
+没有 Token、只想看流程时，加上 `--mock`。那是样例门店，不会连接官方服务，也不会下单。
+
+`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`node dist/src/cli.js setup claude --print`（`--dry-run` 相同，不写文件）。
+
+离线预览不连接麦当劳：`node dist/src/cli.js demo`，以及 `node dist/src/cli.js doctor --mock`。样例门店和价格不是官方实时数据。有 Token 之后，`node dist/src/cli.js doctor` 只做只读自检：检查 Token 有没有漏进项目文件，然后列出工具，并查询当前时间、活动日历和营养数据长度。它不查订单、不领券、不抽奖、不下单。加 `--city 上海 --keyword 南京西路` 可以再列一次附近门店；查到 0 家会告警并建议换关键词。到店自取（`beType` 为 1）没有 `beCode`。`beCode` 只有得来速（`beType` 为 5）、外送（`beType` 为 2）和企业团餐（`beType` 为 6）才需要，这三种之外不要传。门店不在营业时间时，上游错误码 `600057` 会说成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。
 
 ## 它做什么
 
@@ -70,13 +86,20 @@ mcd · 午饭时间 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · �
 
 ## 接到 Claude Code
 
-状态栏会频繁执行，请指向本机文件，不要每次都走 `npx`。
+不用手贴 JSON。在仓库目录执行：
+
+```bash
+node dist/src/cli.js setup claude
+```
+
+它会把下面这种状态栏和 Stop hook 合并进 `~/.claude/settings.json`，并把 `/ABSOLUTE/PATH` 换成这台机器上的绝对路径。原文件会先复制备份。再执行一次不会多加一条 hook。`setup claude --print` 只打印结果，不写文件。状态栏会频繁执行，所以命令指向本机文件，不走 `npx`。
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "node /ABSOLUTE/PATH/mcd-cooldown/dist/src/cli.js statusline"
+    "command": "node /ABSOLUTE/PATH/mcd-cooldown/dist/src/cli.js statusline",
+    "padding": 0
   },
   "hooks": {
     "Stop": [
@@ -114,14 +137,7 @@ mcd · 午饭时间 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · �
 
 `${MCD_MCP_TOKEN}` 由你的 shell 提供。不要把真实 Token 写进这个 JSON。
 
-本机准备常点餐品：
-
-```bash
-node dist/src/cli.js init
-node dist/src/cli.js meals on
-```
-
-`init` 在交互终端里会问要不要打开饭点提醒。非交互环境直接执行 `meals on`。改时间：
+`init` 写好的是到店自取：`beType` 为 1，`takeWayCode` 为 `eat-in`，没有 `beCode`。字段形状见 `examples/config.example.json`。得来速、外送和团餐要自己补上 `beCode`。改饭点：
 
 ```bash
 node dist/src/cli.js meals lunch 12:15
@@ -131,9 +147,9 @@ node dist/src/cli.js later
 node dist/src/cli.js skip
 ```
 
-`ate` 表示这顿已经吃了或带了饭，`later` 是 15 分钟后再说，`skip` 是今天这顿跳过。周末默认关闭，`meals weekends on` 才连周末一起看。系统通知默认关闭；`meals notify on` 之后，也只在那一次 Stop hook 里尝试发送。
+`ate` 表示这顿已经吃了或带了饭，`later` 是 15 分钟后再说，`skip` 是今天这顿跳过。周末默认关闭，`meals weekends on` 才连周末一起看。系统通知默认关闭；`meals notify on` 之后，也只在那一次 Stop hook 里尝试发送。非交互环境想直接打开饭点提醒，给 `init` 加上 `--meals`，或之后执行 `meals on`。
 
-编辑 `~/.mcd-cooldown/config.json`，把 `YOUR_` 开头的占位换成你自己的门店和餐品编码。示例里的到店配置没有 `beCode`。到店取餐的 `takeWayCode` 用 `calculate-price` 返回的 `eat-in`（堂食）或 `locker-in`（外带）。得来速、外送和团餐再补上 `beCode`。然后：
+然后：
 
 ```bash
 node dist/src/cli.js plan
@@ -147,6 +163,8 @@ node dist/src/cli.js watch <订单号>
 
 | 命令 | 作用 |
 |---|---|
+| `init` | 按城市和关键词选择门店和常点餐品，写入配置。只读，不下单 |
+| `setup claude` | 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`。先备份，可重复执行。`--print` 只预览 |
 | `doctor` | 只读自检。没有 Token 时加 `--mock` |
 | `guard` | 标准输入输出上的 MCP 网关 |
 | `serve` | 只监听 `127.0.0.1:39217` 的 HTTP 网关 |
@@ -169,7 +187,7 @@ node dist/src/cli.js watch <订单号>
 npm test
 ```
 
-测试使用合成样例，不连接官方服务，也不包含真实 Token、订单或地址。配置 Token 之后，用 `doctor` 做一次真实只读验证。
+测试使用合成样例，不连接官方服务，也不包含真实 Token、订单或地址。`init --mock` 和 `setup claude --print` 也在测试里。配置 Token 之后，用 `doctor` 做一次真实只读验证。
 
 ## 参赛文件
 

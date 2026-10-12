@@ -73,6 +73,23 @@ export class FixtureBackend implements ToolCaller {
           distance: 100,
         };
         if (beType === 2 || beType === 5 || beType === 6) store.beCode = "SAMPLE-BE";
+        if (args.keyword === "打烊") {
+          return [{ ...store, storeName: "麦当劳示例打烊", storeCode: "CLOSED-STORE", businessStatus: false }];
+        }
+        if (args.keyword === "两家") {
+          return [
+            store,
+            {
+              storeName: "麦当劳示例二店",
+              storeCode: "SAMPLE-STORE-2",
+              address: "示例路 2 号（样例，不是真实门店）",
+              businessStatus: false,
+              businessStartTime: "07:00",
+              businessEndTime: "22:00",
+              distance: 400,
+            },
+          ];
+        }
         return [store];
       }
       case "query-meals":
@@ -80,12 +97,26 @@ export class FixtureBackend implements ToolCaller {
           return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
         }
         return {
-          categories: [{ name: "人气热卖", meals: [{ code: "SAMPLE-001", tags: ["样例"] }] }],
+          categories: [
+            {
+              name: "人气热卖",
+              meals: [
+                { code: "SAMPLE-001", tags: ["样例"] },
+                { code: "SAMPLE-002", tags: ["样例"] },
+              ],
+            },
+          ],
           meals: {
             "SAMPLE-001": {
               name: "示例套餐",
               currentPrice: "36.50",
               originalPrice: "36.50",
+              canWithOrder: false,
+            },
+            "SAMPLE-002": {
+              name: "示例玉米杯",
+              currentPrice: "8.00",
+              originalPrice: "8.00",
               canWithOrder: false,
             },
           },
