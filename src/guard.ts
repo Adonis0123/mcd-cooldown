@@ -11,6 +11,7 @@ import { decideIntercept } from "./policy.js";
 import { scrubSecrets } from "./redact.js";
 import type { HomeStore } from "./store.js";
 import { isQuietHour } from "./time.js";
+import { userCommand } from "./user-command.js";
 import { VERSION } from "./version.js";
 
 export interface GuardDeps {
@@ -157,7 +158,7 @@ export class Guard {
       lines.push(plan.note);
       if (plan.pendingId) lines.push(`确认号 ${plan.pendingId}`);
     } else {
-      lines.push("还没有核价备选。可在本机运行 mcd-cooldown plan。");
+      lines.push(`还没有核价备选。可在本机运行 ${userCommand()} plan。`);
     }
     if (pickup && !pickup.terminal) lines.push(`取餐 ${pickup.code ?? pickup.orderId} · ${pickup.status}`);
     const meal = mealStatusFor(this.deps.now(), this.deps.config, this.deps.store);

@@ -69,9 +69,9 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 交互终端里询问城市、关键词、门店序号和常点餐品；非交互环境使用 `--city`、`--keyword`、`--store`、`--item`。只调用：
 
 1. `query-nearby-stores`，参数 `searchType: 2`、`beType: 1`、`city`、`keyword`
-2. `query-meals`，参数 `storeCode`、`beType: 1`、`orderType: 1`。到店自取不传 `beCode`
+2. `query-meals`，参数 `storeCode`、`beType: 1`、`orderType: 1`，以及 `reservationDate`（`yyyy-MM-dd HH:mm`，取下一个午饭或晚饭，默认 12:00 / 18:30，已经过了的不用）。到店自取不传 `beCode`。这样早上初始化不会把当时的早餐菜单存成常点
 
-不调用 `calculate-price`、`create-order` 或其他写工具。选中的门店和餐品编码写入本机 `config.json`。
+不调用 `calculate-price`、`create-order` 或其他写工具。选中的门店和餐品编码写入本机 `config.json`。门店和餐品已经能从参数对上时，终端只打印选定结果。
 
 ### `plan`：按额度恢复时间准备一单核价
 
@@ -79,7 +79,7 @@ Token 只会出现在网关发往 `https://mcp.mcd.cn` 或本机回环地址的�
 2. 用北京时间把「额度恢复」倒推 `prepMinutes`（默认 20 分钟），得到建议确认时间。到店自取是为了让人起身活动一下
 3. 调用 `now-time-info`
 4. 若本机配置了门店和常点餐品，调用 `calculate-price`。参数来自配置里的 `storeCode`、`beType`、`orderType` 和 `items`。`beCode` 只在得来速（5）、外送（2）和团餐（6）时附上；到店自取（1）不传
-5. 核价成功且未超限时，在本机写下一条 `create-order` 待确认请求。此时还没有调用 `create-order`。门店不营业（错误码 `600057`）时只说明原因，不生成待确认单
+5. 核价成功且未超限时，在本机写下一条 `create-order` 待确认请求。此时还没有调用 `create-order`。门店不营业（错误码 `600057`）时只说明原因，不生成待确认单。常点在这个时段不卖（错误码 `60006`）时说明重新跑 `init`，不把上游原文甩给用户
 
 23:00 到次日 06:00（按配置时区，默认北京时间）只保留核价，不生成待确认单，并提示先休息。这个时段要生成待确认单或确认提交，都必须额外加上 `--allow-quiet`。
 

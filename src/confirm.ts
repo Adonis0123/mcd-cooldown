@@ -1,7 +1,7 @@
 import { isUnpricedWrite } from "./catalog.js";
 import type { AppConfig } from "./config.js";
 import { cnyToCents, moneyDecision } from "./money.js";
-import { businessFailed, textOf, unwrapPayload } from "./mcp/parse.js";
+import { businessFailed, MEAL_UNAVAILABLE_HINT, textOf, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller, ToolResult } from "./mcp/types.js";
 import { extractOrderId, extractPickup, isTerminalStatus, orderArgsForUpstream, quoteCreateOrder } from "./order-flow.js";
 import { decideIntercept } from "./policy.js";
@@ -10,6 +10,7 @@ import type { HomeStore, PendingAction } from "./store.js";
 import { markOrderedMeal } from "./meals.js";
 import { isQuietHour } from "./time.js";
 import { quietLabel } from "./messages.js";
+import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 
 export interface ConfirmOptions {
@@ -37,7 +38,7 @@ export async function confirmPending(
     throw new UserError("请求已过期，没有提交");
   }
   if (pending.status === "confirming" && !options.retry) {
-    throw new UserError("上次确认可能已经发出。请先看 mcd-cooldown log，核对之后再加 --retry。不要盲目重试。");
+    throw new UserError(`上次确认可能已经发出。请先看 ${userCommand()} log，核对之后再加 --retry。不要盲目重试。`);
   }
   if (isQuietHour(options.now, config.quietStartHour, config.quietEndHour, config.meals.timezone) && !options.allowQuiet) {
     throw new UserError(
@@ -84,7 +85,10 @@ export async function confirmPending(
     throw new UserError(`提交失败，没有记为成功：${scrubSecrets(message, options.token)}`);
   }
   const payload = unwrapPayload(result);
-  const failed = result.isError ? textOf(result).slice(0, 300) : businessFailed(payload);
+  const business = businessFailed(payload);
+  const raw = textOf(result);
+  const failed =
+    business ?? (result.isError ? (/"code"\s*:\s*"?60006"?/.test(raw) ? MEAL_UNAVAILABLE_HINT : raw.slice(0, 300)) : null);
   if (failed) {
     store.writePending({ ...confirming, status: "pending" });
     store.appendAudit({
@@ -144,7 +148,7 @@ function successText(tool: string, resultText: string, orderId: string | null): 
     lines.push("支付需要你自己完成，程序不会代付。");
     const url = /https:\/\/[^\s"]+/.exec(resultText)?.[0];
     if (url) lines.push(url);
-    lines.push(`取餐进度：mcd-cooldown watch ${orderId}`);
+    lines.push(`取餐进度：${userCommand()} watch ${orderId}`);
     return lines.join("\n");
   }
   if (resultText.trim()) lines.push(resultText.slice(0, 500));

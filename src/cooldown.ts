@@ -2,7 +2,7 @@ import type { AppConfig } from "./config.js";
 import { placeholderConfig } from "./config.js";
 import { mealStatusFor, prepareMeal, type MealStatus } from "./meals.js";
 import { cnyToCents, formatYuanFromCents, moneyDecision, validateCreateOrder } from "./money.js";
-import { payloadRecord, unwrapPayload } from "./mcp/parse.js";
+import { MEAL_UNAVAILABLE_HINT, payloadRecord, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
 import { orderArgsFromConfig, quoteCreateOrder } from "./order-flow.js";
 import { asText } from "./is.js";
@@ -10,6 +10,7 @@ import { describeSchedule } from "./schedule.js";
 import { extractSession, formatWindow, primaryWindow, type SessionSignals } from "./session.js";
 import type { HomeStore, PickupState, PlanState, QuotaSnapshot } from "./store.js";
 import { formatRemaining, isQuietHour, zonedParts } from "./time.js";
+import { userCommand } from "./user-command.js";
 
 export interface StatusInput {
   now: Date;
@@ -66,7 +67,12 @@ export function formatStatusline(input: StatusInput): string {
   return ["mcd", ...segs].join(" · ").replace(/\s*\n\s*/g, " ");
 }
 
-function overlayMeal(prior: MealStatus, saved: { quoteCents: number | null; pendingId: string | null; prepMinutes: number | null; prepSource: "mcp" | "default" | null } | null, now: Date, timeZone: string): MealStatus {
+function overlayMeal(
+  prior: MealStatus,
+  saved: { quoteCents: number | null; pendingId: string | null; prepMinutes: number | null; prepSource: "mcp" | "default" | null; note?: string | null } | null,
+  now: Date,
+  timeZone: string,
+): MealStatus {
   if (!saved) return prior;
   const prep = saved.prepMinutes ?? prior.prepMinutes;
   return {
@@ -76,6 +82,7 @@ function overlayMeal(prior: MealStatus, saved: { quoteCents: number | null; pend
     prepMinutes: prep,
     prepSource: saved.prepSource === "mcp" ? "mcp" : prior.prepSource,
     arriveHm: zonedParts(new Date(now.getTime() + prep * 60_000), timeZone).hm,
+    note: saved.note ?? prior.note,
   };
 }
 
@@ -126,7 +133,7 @@ export async function preparePlan(input: {
       });
       if (!limit.ok) note = limit.reason;
       else if (isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone) && !input.allowQuiet) {
-        note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 mcd-cooldown plan --allow-quiet。`;
+        note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 ${userCommand()} plan --allow-quiet。`;
       } else {
         const pending = input.store.createPending({
           tool: "create-order",
@@ -136,7 +143,7 @@ export async function preparePlan(input: {
           ttlMinutes: input.config.pendingTtlMinutes,
         });
         pendingId = pending.id;
-        note = `${quoted.note}尚未下单。确认：mcd-cooldown confirm ${pending.id}`;
+        note = `${quoted.note}尚未下单。确认：${userCommand()} confirm ${pending.id}`;
         input.store.appendAudit({
           at: input.now.toISOString(),
           tool: "create-order",
@@ -235,27 +242,31 @@ export async function runHook(input: {
   return text;
 }
 
+function priceSentence(cents: number | null, note: string | null | undefined, empty: string): string {
+  if (cents != null) return `已按你保存的份量核价 ¥${formatYuanFromCents(cents)}，尚未下单。`;
+  if (note?.includes(MEAL_UNAVAILABLE_HINT)) return `${MEAL_UNAVAILABLE_HINT}程序没有下单。`;
+  return empty;
+}
+
 function hookText(config: AppConfig, now: Date, session: SessionSignals, plan: PlanState | null, meal: MealStatus | null): string {
+  const cmd = userCommand();
   const primary = primaryWindow(session.windows);
   const schedule = describeSchedule(now, primary?.resetsAtMs ?? null, config);
-  const price = plan?.quoteCents != null ? `已按你保存的份量核价 ¥${formatYuanFromCents(plan.quoteCents)}，尚未下单。` : "这次没有生成核价。";
+  const price = priceSentence(plan?.quoteCents ?? null, plan?.note, "这次没有生成核价。");
   if (schedule.quiet) {
     const confirm = plan?.pendingId
       ? `已有待确认单 ${plan.pendingId}，提交时需要加上 --allow-quiet。`
-      : "这个时段不生成待确认单。仍要准备请运行 mcd-cooldown plan --allow-quiet。";
+      : `这个时段不生成待确认单。仍要准备请运行 ${cmd} plan --allow-quiet。`;
     return `已经比较晚了，建议先休息。${price}${confirm}`;
   }
   if (meal) {
-    const mealPrice =
-      meal.quoteCents != null
-        ? `已按你保存的份量核价 ¥${formatYuanFromCents(meal.quoteCents)}，尚未下单。`
-        : "这次没有生成核价。先起来吃饭就好。";
-    const confirm = meal.pendingId ? `要下单请在本机执行 mcd-cooldown confirm ${meal.pendingId}。` : "";
+    const mealPrice = priceSentence(meal.quoteCents, meal.note, "这次没有生成核价。先起来吃饭就好。");
+    const confirm = meal.pendingId ? `要下单请在本机执行 ${cmd} confirm ${meal.pendingId}。` : "";
     const quota = primary && primary.usedPercentage >= config.quotaThreshold ? `额度${schedule.headline}。` : "";
-    return `${meal.phrase}到了，起来吃一点。现在确认的话，大约 ${meal.arriveHm} ${meal.verb}。${quota}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：mcd-cooldown ate、later、skip。`;
+    return `${meal.phrase}到了，起来吃一点。现在确认的话，大约 ${meal.arriveHm} ${meal.verb}。${quota}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：${cmd} ate、later、skip。`;
   }
   if (primary && primary.usedPercentage >= config.quotaThreshold) {
-    const confirm = plan?.pendingId ? `要下单请在本机执行 mcd-cooldown confirm ${plan.pendingId}。` : "";
+    const confirm = plan?.pendingId ? `要下单请在本机执行 ${cmd} confirm ${plan.pendingId}。` : "";
     return `额度${schedule.headline}。${schedule.hint}${price}${confirm}`.replace(/\s+/g, " ").trim();
   }
   return `这轮已经写了一段时间，起来活动一下。${price}程序不会自动下单。`;

@@ -1,7 +1,7 @@
 import type { AppConfig } from "./config.js";
 import { asNumber, isRecord } from "./is.js";
 import { beCodeRequired, extractCents, formatYuanFromCents } from "./money.js";
-import { businessFailed, textOf, unwrapPayload } from "./mcp/parse.js";
+import { businessFailed, MEAL_UNAVAILABLE_HINT, textOf, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
 
 export function orderArgsForUpstream(args: Record<string, unknown>): Record<string, unknown> {
@@ -50,12 +50,16 @@ export async function quoteCreateOrder(
     return { cents: null, prepMinutes: null, note: "缺少 items，无法核价。" };
   }
   const result = await caller.callTool("calculate-price", calculatePriceArgs(args));
-  if (result.isError) {
-    return { cents: null, prepMinutes: null, note: `calculate-price 返回错误：${textOf(result).slice(0, 180)}` };
-  }
   const payload = unwrapPayload(result);
   const failed = businessFailed(payload);
-  if (failed) return { cents: null, prepMinutes: null, note: `核价未成功：${failed}` };
+  if (failed) {
+    return { cents: null, prepMinutes: null, note: failed === MEAL_UNAVAILABLE_HINT ? failed : `核价未成功：${failed}` };
+  }
+  if (result.isError) {
+    const text = textOf(result);
+    if (/"code"\s*:\s*"?60006"?/.test(text)) return { cents: null, prepMinutes: null, note: MEAL_UNAVAILABLE_HINT };
+    return { cents: null, prepMinutes: null, note: `calculate-price 返回错误：${text.slice(0, 180)}` };
+  }
   const cents = extractCents(payload);
   const prepMinutes = extractPrepMinutes(payload);
   if (cents == null) {

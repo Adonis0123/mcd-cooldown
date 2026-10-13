@@ -81,9 +81,15 @@ export function payloadRecord(payload: unknown): Record<string, unknown> {
 }
 
 export const STORE_CLOSED_HINT = "门店当前不营业，可换 24 小时门店或改用预约（reservationDate）";
+export const MEAL_UNAVAILABLE_HINT = "常点里有这个时段不卖的餐品（比如早餐款），重新跑 init 换一份";
 
 export function businessFailed(payload: unknown): string | null {
   if (!isRecord(payload) || payload.success !== false) return null;
-  if (payload.code === 600057 || payload.code === "600057") return STORE_CLOSED_HINT;
+  if (sameCode(payload.code, 600057)) return STORE_CLOSED_HINT;
+  if (sameCode(payload.code, 60006)) return MEAL_UNAVAILABLE_HINT;
   return typeof payload.message === "string" && payload.message.trim() ? payload.message.trim() : "上游返回失败";
+}
+
+function sameCode(code: unknown, expected: number): boolean {
+  return code === expected || code === String(expected);
 }

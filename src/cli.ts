@@ -21,44 +21,48 @@ import { scrubForLog } from "./redact.js";
 import { loadContext, makeCaller } from "./runtime.js";
 import { serveStdio } from "./stdio-server.js";
 import { clockFromEnv } from "./time.js";
+import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 import { VERSION } from "./version.js";
 import { watchOrder } from "./watch.js";
 
-const HELP = `mcd-cooldown ${VERSION}
+function helpText(): string {
+  const cmd = userCommand();
+  return `mcd-cooldown ${VERSION}
 额度用完，先核价。本地网关拦住写操作，确认后才提交。
 
-  mcd-cooldown doctor [--mock] [--city 城市 --keyword 关键词]
-  mcd-cooldown guard
-  mcd-cooldown serve [--port 39217]
-  mcd-cooldown plan [--mock] [--allow-quiet]
-  mcd-cooldown statusline
-  mcd-cooldown hook [--no-prepare] [--mock]
-  mcd-cooldown confirm <请求号> [--allow-quiet] [--retry]
-  mcd-cooldown deny <请求号>
-  mcd-cooldown pending
-  mcd-cooldown log
-  mcd-cooldown watch <订单号>
-  mcd-cooldown meals on
-  mcd-cooldown meals lunch 12:00
-  mcd-cooldown meals dinner 18:30
-  mcd-cooldown meals weekends on
-  mcd-cooldown ate
-  mcd-cooldown later
-  mcd-cooldown skip
-  mcd-cooldown init [--mock] [--meals] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
-  mcd-cooldown setup claude [--print | --dry-run]
-  mcd-cooldown demo
-  mcd-cooldown mock [--port 39217]
+  ${cmd} doctor [--mock] [--city 城市 --keyword 关键词]
+  ${cmd} guard
+  ${cmd} serve [--port 39217]
+  ${cmd} plan [--mock] [--allow-quiet]
+  ${cmd} statusline
+  ${cmd} hook [--no-prepare] [--mock]
+  ${cmd} confirm <请求号> [--allow-quiet] [--retry]
+  ${cmd} deny <请求号>
+  ${cmd} pending
+  ${cmd} log
+  ${cmd} watch <订单号>
+  ${cmd} meals on
+  ${cmd} meals lunch 12:00
+  ${cmd} meals dinner 18:30
+  ${cmd} meals weekends on
+  ${cmd} ate
+  ${cmd} later
+  ${cmd} skip
+  ${cmd} init [--mock] [--meals] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
+  ${cmd} setup claude [--print | --dry-run]
+  ${cmd} demo
+  ${cmd} mock [--port 39217]
 
 Token 只从环境变量 MCD_MCP_TOKEN 或本机 ~/.mcd-cooldown/token 读取。
 init 只读查询门店和菜单，不会下单。
 非麦当劳官方产品。默认只核价，不会自动下单。`;
+}
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   if (flagBool(parsed.flags, "help") || parsed.command === "help") {
-    process.stdout.write(`${HELP}\n`);
+    process.stdout.write(`${helpText()}\n`);
     return;
   }
   if (parsed.command === "version") {
@@ -88,7 +92,7 @@ async function main(): Promise<void> {
       const guided = interactive || Boolean(city?.trim() || keyword?.trim() || storePick?.trim() || itemPicks.length > 0);
       if (!guided) {
         throw new UserError(
-          "交互终端里运行 mcd-cooldown init，按编号选择门店和常点餐品。\n非交互环境：mcd-cooldown init --city 城市 --keyword 关键词 --store 门店 --item 餐品编码\n没有写入配置。",
+          `交互终端里运行 ${userCommand()} init，按编号选择门店和常点餐品。\n非交互环境：${userCommand()} init --city 城市 --keyword 关键词 --store 门店 --item 餐品编码\n没有写入配置。`,
         );
       }
       const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
@@ -105,6 +109,7 @@ async function main(): Promise<void> {
           askMeals: interactive && !mealsFlag,
           interactive,
           prompter,
+          now: now(),
           emit: (line) => process.stdout.write(`${scrub(line)}\n`),
         });
         assertConfigHidesToken(result.configText, ctx.token);
@@ -119,7 +124,7 @@ async function main(): Promise<void> {
     }
     case "setup": {
       if (parsed.positionals[0] !== "claude" || parsed.positionals.length > 1) {
-        throw new UserError("用法：mcd-cooldown setup claude [--print]");
+        throw new UserError(`用法：${userCommand()} setup claude [--print]`);
       }
       const dryRun = flagBool(parsed.flags, "print") || flagBool(parsed.flags, "dry-run");
       const settingsPath = flagString(parsed.flags, "settings") ?? join(homedir(), ".claude", "settings.json");
@@ -208,7 +213,7 @@ async function main(): Promise<void> {
     }
     case "confirm": {
       const id = parsed.positionals[0];
-      if (!id) throw new UserError("用法：mcd-cooldown confirm <请求号>");
+      if (!id) throw new UserError(`用法：${userCommand()} confirm <请求号>`);
       const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
       const text = await confirmPending(ctx.store, caller, ctx.config, id, {
         allowQuiet: flagBool(parsed.flags, "allow-quiet"),
@@ -221,7 +226,7 @@ async function main(): Promise<void> {
     }
     case "deny": {
       const id = parsed.positionals[0];
-      if (!id) throw new UserError("用法：mcd-cooldown deny <请求号>");
+      if (!id) throw new UserError(`用法：${userCommand()} deny <请求号>`);
       process.stdout.write(`${denyPending(ctx.store, id, now())}\n`);
       return;
     }
@@ -264,13 +269,13 @@ async function main(): Promise<void> {
     }
     case "watch": {
       const orderId = parsed.positionals[0] ?? ctx.store.readPickup()?.orderId;
-      if (!orderId) throw new UserError("用法：mcd-cooldown watch <订单号>");
+      if (!orderId) throw new UserError(`用法：${userCommand()} watch <订单号>`);
       const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
       process.stdout.write(`${await watchOrder(caller, ctx.store, orderId, now())}\n`);
       return;
     }
     default:
-      throw new UserError(`未知命令 ${parsed.command}\n\n${HELP}`);
+      throw new UserError(`未知命令 ${parsed.command}\n\n${helpText()}`);
   }
 }
 

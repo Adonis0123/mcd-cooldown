@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { flagBool, flagList, flagString, parseArgs } from "../src/args.js";
@@ -14,6 +14,7 @@ import {
   assertInitTool,
   extractMeals,
   formatInitSummary,
+  nextMealReservationDate,
   pickByToken,
   runInit,
   type MenuItem,
@@ -22,6 +23,8 @@ import { FixtureBackend } from "../src/mcp/fixtures.js";
 import { unwrapPayload } from "../src/mcp/parse.js";
 import type { ToolCaller } from "../src/mcp/types.js";
 import { orderArgsFromConfig } from "../src/order-flow.js";
+import { zonedInstant } from "../src/time.js";
+import { userCommand } from "../src/user-command.js";
 import { UserError } from "../src/user-error.js";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -74,6 +77,8 @@ test("flags accept a store and repeated meal items", () => {
 
 test("init looks up a store and meals with the mock MCP and never orders", async () => {
   const backend = new FixtureBackend();
+  const lines: string[] = [];
+  const now = zonedInstant(2026, 10, 13, 9, 50, "Asia/Shanghai");
   const result = await runInit({
     caller: backend,
     city: "示例市",
@@ -82,7 +87,10 @@ test("init looks up a store and meals with the mock MCP and never orders", async
     items: ["SAMPLE-001", "SAMPLE-001", "1,2"],
     ...quietInit,
     mealsEnabled: true,
+    now,
+    emit: (line) => lines.push(line),
   });
+  assert.equal(lines.length, 0);
   assert.deepEqual(
     backend.calls.map((call) => call.name),
     ["query-nearby-stores", "query-meals"],
@@ -91,6 +99,7 @@ test("init looks up a store and meals with the mock MCP and never orders", async
   assert.equal(backend.calls[1]?.args.storeCode, "SAMPLE-STORE");
   assert.equal(backend.calls[1]?.args.beType, 1);
   assert.equal(backend.calls[1]?.args.orderType, 1);
+  assert.equal(backend.calls[1]?.args.reservationDate, "2026-10-13 12:00");
   assert.equal("beCode" in (backend.calls[1]?.args ?? {}), false);
   for (const tool of CATALOG) {
     if (tool.effect === "write") assert.equal(backend.called(tool.name), 0, tool.name);
@@ -112,6 +121,7 @@ test("init looks up a store and meals with the mock MCP and never orders", async
   assert.equal(result.configText.includes("YOUR_"), false);
   assert.equal(orderArgsFromConfig(loaded)?.beCode, undefined);
   assert.match(formatInitSummary(join(home, "config.json"), result), /没有下单/);
+  assert.match(formatInitSummary(join(home, "config.json"), result), /2026-10-13 12:00/);
 });
 
 test("interactive answers pick a numbered store and meal", async () => {
@@ -191,6 +201,7 @@ test("non-interactive init prints choices and does not write when a pick is miss
     /--item/,
   );
   assert.match(menuLines.join("\n"), /SAMPLE-002/);
+  assert.equal(menuLines.join("\n").includes("麦当劳示例餐厅"), false);
 });
 
 test("init stops on an empty store list or a closed menu and still does not order", async () => {
@@ -268,6 +279,115 @@ test("a caller that rejects write tools can still complete init", async () => {
   assert.equal(result.store.storeCode, "SAMPLE-STORE");
   assert.equal(result.items[0]?.code, "SAMPLE-002");
 });
+
+test("morning init queries the next lunch menu and skips breakfast items", async () => {
+  const morning = zonedInstant(2026, 10, 13, 9, 50, "Asia/Shanghai");
+  const noon = zonedInstant(2026, 10, 13, 12, 0, "Asia/Shanghai");
+  const afternoon = zonedInstant(2026, 10, 13, 13, 0, "Asia/Shanghai");
+  const evening = zonedInstant(2026, 10, 13, 20, 0, "Asia/Shanghai");
+  assert.equal(nextMealReservationDate(morning), "2026-10-13 12:00");
+  assert.equal(nextMealReservationDate(noon), "2026-10-13 18:30");
+  assert.equal(nextMealReservationDate(afternoon), "2026-10-13 18:30");
+  assert.equal(nextMealReservationDate(evening), "2026-10-14 12:00");
+  assert.ok(zonedInstant(2026, 10, 13, 12, 0, "Asia/Shanghai").getTime() > morning.getTime());
+
+  const picked = await runInit({
+    caller: daypartCaller(),
+    city: "示例市",
+    keyword: "示例路",
+    store: "1",
+    items: ["1"],
+    ...quietInit,
+    now: morning,
+  });
+  assert.equal(picked.reservationDate, "2026-10-13 12:00");
+  assert.equal(picked.items[0]?.code, "LUNCH-001");
+  assert.equal(picked.items[0]?.name, "示例巨无霸");
+  assert.equal(picked.called.includes("calculate-price"), false);
+  assert.equal(picked.called.includes("create-order"), false);
+
+  const later = await runInit({
+    caller: daypartCaller(),
+    city: "示例市",
+    keyword: "示例路",
+    store: "SAMPLE-STORE",
+    items: ["LUNCH-001"],
+    ...quietInit,
+    now: evening,
+  });
+  assert.equal(later.reservationDate, "2026-10-14 12:00");
+  assert.equal(later.items[0]?.code, "LUNCH-001");
+});
+
+test("unresolved init picks still print the list, resolved picks stay quiet", async () => {
+  const storeLines: string[] = [];
+  await assert.rejects(
+    () =>
+      runInit({
+        caller: new FixtureBackend(),
+        city: "示例市",
+        keyword: "两家",
+        store: "NO-SUCH",
+        items: ["1"],
+        ...quietInit,
+        emit: (line) => storeLines.push(line),
+      }),
+    /NO-SUCH/,
+  );
+  assert.match(storeLines.join("\n"), /SAMPLE-STORE-2/);
+
+  const menuLines: string[] = [];
+  await assert.rejects(
+    () =>
+      runInit({
+        caller: new FixtureBackend(),
+        city: "示例市",
+        keyword: "示例路",
+        store: "SAMPLE-STORE",
+        items: ["NO-ITEM"],
+        ...quietInit,
+        emit: (line) => menuLines.push(line),
+      }),
+    /NO-ITEM/,
+  );
+  assert.match(menuLines.join("\n"), /示例套餐/);
+  assert.equal(menuLines.join("\n").includes("示例路 1 号"), false);
+});
+
+test("copy-paste commands use mcd-cooldown only when it is on PATH", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcd-bin-"));
+  const bin = join(dir, "mcd-cooldown");
+  writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+  chmodSync(bin, 0o755);
+  const linked = userCommand({ ...process.env, PATH: `${dir}${delimiter}/usr/bin` });
+  assert.equal(linked, "mcd-cooldown");
+  const empty = mkdtempSync(join(tmpdir(), "mcd-empty-path-"));
+  const missing = userCommand({ ...process.env, PATH: empty });
+  assert.notEqual(missing, "mcd-cooldown");
+  assert.match(missing, /^node /);
+  assert.match(missing, /cli\.js$/);
+});
+
+function daypartCaller(): ToolCaller {
+  const stores = new FixtureBackend();
+  return {
+    listTools: () => stores.listTools(),
+    async callTool(name, args) {
+      if (name !== "query-meals") return stores.callTool(name, args);
+      const reservation = typeof args.reservationDate === "string" ? args.reservationDate : "";
+      const hour = Number(reservation.slice(11, 13));
+      const mealtime = hour >= 11 && hour <= 20;
+      const code = mealtime ? "LUNCH-001" : "BF-001";
+      const mealName = mealtime ? "示例巨无霸" : "示例麦满分";
+      const data = {
+        categories: [{ name: mealtime ? "正餐" : "早餐", meals: [{ code }] }],
+        meals: { [code]: { name: mealName, currentPrice: "22.00" } },
+      };
+      const body = { success: true, code: 200, message: "ok", data, sample: true };
+      return { structuredContent: body, content: [{ type: "text", text: JSON.stringify(body) }] };
+    },
+  };
+}
 
 test("claude setup merges, backs up, and stays idempotent", () => {
   const dir = mkdtempSync(join(tmpdir(), "mcd-claude-"));
@@ -361,7 +481,12 @@ test("prepare compiles the cli, and the quick start no longer asks for a hand ed
   assert.equal(readFileSync(cli, "utf8").split("\n")[0], "#!/usr/bin/env node");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   assert.match(readme, /## 三步开始/);
-  assert.match(readme, /node dist\/src\/cli\.js init && node dist\/src\/cli\.js setup claude/);
+  const quick = readme.slice(readme.indexOf("## 三步开始"), readme.indexOf("## 它做什么"));
+  assert.match(quick, /npm install && npm link/);
+  assert.match(quick, /mcd-cooldown init && mcd-cooldown setup claude/);
+  assert.deepEqual(quick.match(/^\d+\. /gm), ["1. ", "2. ", "3. "]);
+  assert.equal(readme.includes("node dist/src/cli.js"), false);
+  assert.match(readme, /dist\/src\/cli\.js statusline/);
   assert.equal(readme.includes("把 YOUR_ 开头的占位换成"), false);
 });
 
@@ -391,6 +516,9 @@ test("cli init --mock writes the picked store and meals without ordering", async
   );
   assert.equal(wrote.code, 0, wrote.stderr);
   assert.match(wrote.stdout, /没有下单/);
+  assert.match(wrote.stdout, /2026-10-12 12:00/);
+  assert.equal(wrote.stdout.includes("人气热卖"), false);
+  assert.equal(wrote.stdout.includes("示例路 1 号"), false);
   assert.equal(wrote.stdout.includes("create-order"), false);
   assert.equal(existsSync(`${configPath}.tmp`), false);
   assert.equal(statSync(configPath).mode & 0o077, 0);
