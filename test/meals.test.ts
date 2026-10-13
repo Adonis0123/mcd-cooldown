@@ -9,6 +9,7 @@ import { formatStatusline, runHook } from "../src/cooldown.js";
 import { mealCommand, mealStatusFor, prepareMeal, dismissMeal } from "../src/meals.js";
 import { extractPrepMinutes } from "../src/order-flow.js";
 import { FixtureBackend } from "../src/mcp/fixtures.js";
+import { userCommand } from "../src/user-command.js";
 import { extractSession } from "../src/session.js";
 import { HomeStore } from "../src/store.js";
 import { zonedInstant, zonedParts } from "../src/time.js";
@@ -208,7 +209,7 @@ test("hook quotes once, merges with cooldown, and does not order", async () => {
   assert.match(first, /午饭时间到了/);
   assert.match(first, /额度/);
   assert.match(first, /¥36\.50/);
-  assert.equal(first.split("mcd-cooldown confirm").length, 2);
+  assert.equal(first.split(`${userCommand()} confirm`).length, 2);
   assert.equal(backend.called("create-order"), 0);
   assert.equal(backend.called("calculate-price"), 1);
   assert.deepEqual(notes, ["该起来吃饭了"]);
@@ -236,6 +237,21 @@ test("hook quotes once, merges with cooldown, and does not order", async () => {
   });
   assert.match(quiet, /先休息/);
   assert.equal(quiet.includes("晚饭"), false);
+});
+
+test("hook explains a usual item the current meal cannot sell", async () => {
+  const { store } = home();
+  const config = mealsOn();
+  config.usual = { label: "早餐款", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] };
+  const backend = new FixtureBackend();
+  const now = at(2026, 10, 12, 11, 50);
+  const text = await runHook({ raw: {}, caller: backend, store, config, now, prepare: true });
+  assert.match(text, /这个时段不卖的餐品/);
+  assert.match(text, /重新跑 init/);
+  assert.equal(text.includes("商品已售罄"), false);
+  assert.equal(text.includes("orderType"), false);
+  assert.equal(backend.called("create-order"), 0);
+  assert.equal(store.listPending().length, 0);
 });
 
 test("a confirmed order clears that meal", async () => {

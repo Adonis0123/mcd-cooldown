@@ -21,11 +21,13 @@ Claude Code、Codex 或 Cursor 的额度见底，或者写到了午饭晚饭，�
 
 ## 三步开始
 
-1. 安装。`npm install` 会跑 `prepare`，编译出 `dist/src/cli.js`。
+1. 安装。`npm install` 会编译出 `dist/src/cli.js`，`npm link` 让 `mcd-cooldown` 可以直接敲。
 
 ```bash
-git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install
+git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install && npm link
 ```
+
+`npm link` 要是提示权限不足，把最后一段换成 `sudo npm link`。如果终端仍找不到命令，执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。没链上时，程序提示里会改用 `node` 加这份安装的绝对路径，复制就能跑。
 
 2. Token 只留在本机终端。不要写进仓库，也不要贴进对话。
 
@@ -36,22 +38,22 @@ export MCD_MCP_TOKEN="从 open.mcd.cn 复制的 Token"
 3. 选门店和常点的餐，并接到 Claude Code。
 
 ```bash
-node dist/src/cli.js init && node dist/src/cli.js setup claude
+mcd-cooldown init && mcd-cooldown setup claude
 ```
 
-`init` 在交互终端里问城市和关键词，用只读的 `query-nearby-stores` 列出门店，你输入序号选定；再用只读的 `query-meals` 列出这家店的菜单，你选常点的几项。配置写入 `~/.mcd-cooldown/config.json`。接着问要不要在状态栏提醒午饭和晚饭，默认工作日 12:00 和 18:30。这一步不下单。
+`init` 在交互终端里问城市和关键词，用只读的 `query-nearby-stores` 列出门店，你输入序号选定；再用只读的 `query-meals` 列出这家店的菜单，你选常点的几项。查菜单时会带上下一个午饭或晚饭（默认 12:00 和 18:30，当天这两顿都过了就用明天的午饭），所以早上初始化选到的是正餐，不是当时正在卖的早餐。配置写入 `~/.mcd-cooldown/config.json`。接着问要不要在状态栏提醒午饭和晚饭，默认工作日 12:00 和 18:30。这一步不下单。
 
-没有交互终端时，把选择写在参数里。`--store` 和 `--item` 先按编码匹配，对不上再按打印出来的序号。`--item` 可以重复。只给了城市和关键词时，会先打出编号列表，不写配置。
+没有交互终端时，把选择写在参数里。`--store` 和 `--item` 先按编码匹配，对不上再按序号。`--item` 可以重复。门店和餐品都能对上时，只打印选定结果。对不上，或只给了城市和关键词时，仍会打出编号列表，不写配置。
 
 ```bash
-node dist/src/cli.js init --city 上海 --keyword 南京西路 --store 门店编码 --item 餐品编码
+mcd-cooldown init --city 上海 --keyword 南京西路 --store 门店编码 --item 餐品编码
 ```
 
 没有 Token、只想看流程时，加上 `--mock`。那是样例门店，不会连接官方服务，也不会下单。
 
-`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`node dist/src/cli.js setup claude --print`（`--dry-run` 相同，不写文件）。
+`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`mcd-cooldown setup claude --print`（`--dry-run` 相同，不写文件）。
 
-离线预览不连接麦当劳：`node dist/src/cli.js demo`，以及 `node dist/src/cli.js doctor --mock`。样例门店和价格不是官方实时数据。有 Token 之后，`node dist/src/cli.js doctor` 只做只读自检：检查 Token 有没有漏进项目文件，然后列出工具，并查询当前时间、活动日历和营养数据长度。它不查订单、不领券、不抽奖、不下单。加 `--city 上海 --keyword 南京西路` 可以再列一次附近门店；查到 0 家会告警并建议换关键词。到店自取（`beType` 为 1）没有 `beCode`。`beCode` 只有得来速（`beType` 为 5）、外送（`beType` 为 2）和企业团餐（`beType` 为 6）才需要，这三种之外不要传。门店不在营业时间时，上游错误码 `600057` 会说成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。
+离线预览不连接麦当劳：`mcd-cooldown demo`，以及 `mcd-cooldown doctor --mock`。样例门店和价格不是官方实时数据。有 Token 之后，`mcd-cooldown doctor` 只做只读自检：检查 Token 有没有漏进项目文件，然后列出工具，并查询当前时间、活动日历和营养数据长度。它不查订单、不领券、不抽奖、不下单。加 `--city 上海 --keyword 南京西路` 可以再列一次附近门店；查到 0 家会告警并建议换关键词。到店自取（`beType` 为 1）没有 `beCode`。`beCode` 只有得来速（`beType` 为 5）、外送（`beType` 为 2）和企业团餐（`beType` 为 6）才需要，这三种之外不要传。门店不在营业时间时，上游错误码 `600057` 会说成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。常点在这个时段不卖时，错误码 `60006` 会说成「常点里有这个时段不卖的餐品（比如早餐款），重新跑 init 换一份」。
 
 ## 它做什么
 
@@ -89,7 +91,7 @@ mcd · 午饭时间 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · �
 不用手贴 JSON。在仓库目录执行：
 
 ```bash
-node dist/src/cli.js setup claude
+mcd-cooldown setup claude
 ```
 
 它会把下面这种状态栏和 Stop hook 合并进 `~/.claude/settings.json`，并把 `/ABSOLUTE/PATH` 换成这台机器上的绝对路径。原文件会先复制备份。再执行一次不会多加一条 hook。`setup claude --print` 只打印结果，不写文件。状态栏会频繁执行，所以命令指向本机文件，不走 `npx`。
@@ -140,11 +142,11 @@ node dist/src/cli.js setup claude
 `init` 写好的是到店自取：`beType` 为 1，`takeWayCode` 为 `eat-in`，没有 `beCode`。字段形状见 `examples/config.example.json`。得来速、外送和团餐要自己补上 `beCode`。改饭点：
 
 ```bash
-node dist/src/cli.js meals lunch 12:15
-node dist/src/cli.js meals dinner 19:00
-node dist/src/cli.js ate
-node dist/src/cli.js later
-node dist/src/cli.js skip
+mcd-cooldown meals lunch 12:15
+mcd-cooldown meals dinner 19:00
+mcd-cooldown ate
+mcd-cooldown later
+mcd-cooldown skip
 ```
 
 `ate` 表示这顿已经吃了或带了饭，`later` 是 15 分钟后再说，`skip` 是今天这顿跳过。周末默认关闭，`meals weekends on` 才连周末一起看。系统通知默认关闭；`meals notify on` 之后，也只在那一次 Stop hook 里尝试发送。非交互环境想直接打开饭点提醒，给 `init` 加上 `--meals`，或之后执行 `meals on`。
@@ -152,9 +154,9 @@ node dist/src/cli.js skip
 然后：
 
 ```bash
-node dist/src/cli.js plan
-node dist/src/cli.js confirm <请求号>
-node dist/src/cli.js watch <订单号>
+mcd-cooldown plan
+mcd-cooldown confirm <请求号>
+mcd-cooldown watch <订单号>
 ```
 
 `confirm` 会再核一次价。超限、读不到金额，或请求过期，都不会下单。支付链接需要你自己打开，程序不代付。

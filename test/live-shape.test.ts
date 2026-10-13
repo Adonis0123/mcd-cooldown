@@ -4,14 +4,16 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { confirmPending } from "../src/confirm.js";
 import { assertHomeOutside, exampleConfigText, loadConfig } from "../src/config.js";
-import { preparePlan } from "../src/cooldown.js";
+import { preparePlan, runHook } from "../src/cooldown.js";
 import { extractStores, runDoctor } from "../src/doctor.js";
 import { prepareMeal } from "../src/meals.js";
 import { FixtureBackend } from "../src/mcp/fixtures.js";
-import { businessFailed, unwrapPayload } from "../src/mcp/parse.js";
+import { businessFailed, MEAL_UNAVAILABLE_HINT, unwrapPayload } from "../src/mcp/parse.js";
 import type { ToolCaller, ToolDefinition } from "../src/mcp/types.js";
-import { calculatePriceArgs, orderArgsFromConfig } from "../src/order-flow.js";
+import { calculatePriceArgs, orderArgsFromConfig, quoteCreateOrder } from "../src/order-flow.js";
+import { UserError } from "../src/user-error.js";
 import { formatAuditLine, formatPendingLine } from "../src/present.js";
 import { HomeStore } from "../src/store.js";
 import { formatZonedDateTime } from "../src/time.js";
@@ -118,6 +120,90 @@ test("closed stores become a readable message and do not create a pending order"
   assert.equal(plan.quoteCents, null);
   assert.match(plan.note, /门店当前不营业/);
   assert.match(plan.note, /reservationDate/);
+  assert.equal(backend.called("create-order"), 0);
+});
+
+test("unavailable usual items become a plain sentence on plan, hook, and confirm", async () => {
+  assert.equal(
+    businessFailed({
+      success: false,
+      code: 60006,
+      message: "商品已售罄或不可售，换一个商品或检查orderType/beType",
+    }),
+    MEAL_UNAVAILABLE_HINT,
+  );
+  assert.equal(MEAL_UNAVAILABLE_HINT.includes("商品已售罄"), false);
+  const textOnly = await quoteCreateOrder(
+    {
+      async listTools() {
+        return [];
+      },
+      async callTool() {
+        const body = JSON.stringify({
+          success: false,
+          code: "60006",
+          message: "商品已售罄或不可售，换一个商品或检查orderType/beType",
+        });
+        return { isError: true, content: [{ type: "text", text: body }] };
+      },
+    },
+    { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] },
+  );
+  assert.equal(textOnly.note, MEAL_UNAVAILABLE_HINT);
+
+  const home = mkdtempSync(join(tmpdir(), "mcd-unavailable-"));
+  const store = new HomeStore(home);
+  store.ensure();
+  const backend = new FixtureBackend();
+  const config = loadConfig(home, {}).config;
+  config.meals.enabled = true;
+  config.store = { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" };
+  config.usual = { label: "早餐款", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] };
+  const plan = await preparePlan({ caller: backend, store, config, now: afternoon, session: { windows: [], durationMs: null } });
+  assert.equal(plan.pendingId, null);
+  assert.equal(plan.quoteCents, null);
+  assert.equal(plan.note, MEAL_UNAVAILABLE_HINT);
+  assert.equal(plan.note.includes("orderType"), false);
+
+  const mealHome = mkdtempSync(join(tmpdir(), "mcd-unavailable-hook-"));
+  const mealStore = new HomeStore(mealHome);
+  mealStore.ensure();
+  const hookBackend = new FixtureBackend();
+  const hook = await runHook({
+    raw: { rate_limits: { five_hour: { used_percentage: 96, resets_at: afternoon.getTime() / 1000 + 3600 } } },
+    caller: hookBackend,
+    store: mealStore,
+    config,
+    now: afternoon,
+    prepare: true,
+  });
+  assert.match(hook, /重新跑 init/);
+  assert.equal(hook.includes("商品已售罄"), false);
+  assert.equal(hookBackend.called("create-order"), 0);
+
+  const pending = store.createPending({
+    tool: "create-order",
+    args: {
+      storeCode: "SAMPLE-STORE",
+      beType: 1,
+      orderType: 1,
+      takeWayCode: "eat-in",
+      items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }],
+    },
+    quoteCents: 2000,
+    now: afternoon,
+    ttlMinutes: 30,
+  });
+  await assert.rejects(
+    () => confirmPending(store, backend, config, pending.id, { allowQuiet: false, retry: false, now: afternoon, token: null }),
+    (error: unknown) => {
+      assert.ok(error instanceof UserError);
+      assert.match(error.message, /重新跑 init/);
+      assert.equal(error.message.includes("商品已售罄"), false);
+      assert.equal(error.message.includes("orderType"), false);
+      return true;
+    },
+  );
   assert.equal(backend.called("create-order"), 0);
 });
 

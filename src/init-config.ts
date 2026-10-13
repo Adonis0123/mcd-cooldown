@@ -1,9 +1,11 @@
 import { toolEffect } from "./catalog.js";
-import { filledConfigText, type StoreConfig, type UsualConfig } from "./config.js";
+import { defaultMeals, filledConfigText, type StoreConfig, type UsualConfig } from "./config.js";
 import { extractStores, type StoreHit } from "./doctor.js";
 import { asText, isRecord } from "./is.js";
 import { businessFailed, payloadRecord, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
+import { parseHm, zonedInstant, zonedParts } from "./time.js";
+import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 
 const INIT_TOOLS = new Set(["query-nearby-stores", "query-meals"]);
@@ -30,6 +32,7 @@ export interface RunInitOptions {
   interactive: boolean;
   prompter?: Prompter;
   emit?: (line: string) => void;
+  now?: Date;
 }
 
 export interface RunInitResult {
@@ -38,6 +41,7 @@ export interface RunInitResult {
   store: StoreHit;
   items: MenuItem[];
   mealsEnabled: boolean;
+  reservationDate: string;
 }
 
 export function assertInitTool(name: string): void {
@@ -139,18 +143,53 @@ export function formatMenuChoices(items: readonly MenuItem[]): string {
 }
 
 export function formatInitSummary(file: string, result: RunInitResult): string {
+  const cmd = userCommand();
   const items = result.items.map((item) => `${item.name}（${item.code}）`).join("、");
   const meals = result.mealsEnabled
-    ? "饭点提醒已写入配置。周末默认关闭，需要的话再执行 mcd-cooldown meals weekends on"
-    : "写代码时想被提醒吃饭：mcd-cooldown meals on";
+    ? `饭点提醒已写入配置。周末默认关闭，需要的话再执行 ${cmd} meals weekends on`
+    : `写代码时想被提醒吃饭：${cmd} meals on`;
   return [
     `已写入 ${file}`,
     `门店：${result.store.storeName}（${result.store.storeCode}）到店自取`,
     `常点：${items}`,
+    `菜单按下一个饭点 ${result.reservationDate} 查询，避开当时段不卖的早餐款。`,
     "只读查询了 query-nearby-stores 和 query-meals。没有下单。",
     "Token 不要写进这个文件。",
     meals,
   ].join("\n");
+}
+
+/**
+ * Next lunch or dinner, strictly after `now`, as `yyyy-MM-dd HH:mm`.
+ * Init has no saved config yet, so the clocks default to 12:00 and 18:30.
+ * A past reservationDate is rejected by the upstream menu API.
+ */
+export function nextMealReservationDate(
+  now: Date,
+  timeZone = defaultMeals().timezone,
+  lunch = defaultMeals().lunch,
+  dinner = defaultMeals().dinner,
+): string {
+  const parts = zonedParts(now, timeZone);
+  let best: Date | null = null;
+  for (let add = 0; add < 3; add += 1) {
+    const day = shiftDate(parts.year, parts.month, parts.day, add);
+    for (const hm of [lunch, dinner]) {
+      const clock = parseHm(hm);
+      if (!clock) continue;
+      const instant = zonedInstant(day.year, day.month, day.day, clock.hour, clock.minute, timeZone);
+      if (instant.getTime() <= now.getTime()) continue;
+      if (!best || instant.getTime() < best.getTime()) best = instant;
+    }
+  }
+  if (!best) throw new UserError("算不出下一个午饭或晚饭时间。没有写入配置，也没有下单。");
+  const zoned = zonedParts(best, timeZone);
+  return `${zoned.ymd} ${zoned.hm}`;
+}
+
+function shiftDate(year: number, month: number, day: number, days: number): { year: number; month: number; day: number } {
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
 }
 
 export async function runInit(options: RunInitOptions): Promise<RunInitResult> {
@@ -169,18 +208,24 @@ export async function runInit(options: RunInitOptions): Promise<RunInitResult> {
   if (stores.length === 0) {
     throw new UserError("query-nearby-stores：0 家门店。换一个城市或关键词再试。没有写入配置，也没有下单。");
   }
-  emit(formatStoreChoices(stores));
+  const storeToken = options.store?.trim() ?? "";
+  const storeKnown = storeToken !== "" && pickByToken(stores, storeToken, (store) => store.storeCode) != null;
+  if (!storeKnown) emit(formatStoreChoices(stores));
   const store = await chooseStore(stores, options, emit);
+  const reservationDate = nextMealReservationDate(options.now ?? new Date());
   const mealPayload = await readTool(caller, "query-meals", {
     storeCode: store.storeCode,
     beType: 1,
     orderType: 1,
+    reservationDate,
   });
   const menu = extractMeals(mealPayload);
   if (menu.length === 0) {
     throw new UserError("这家店的菜单是空的。没有写入配置，也没有下单。");
   }
-  emit(formatMenuChoices(menu));
+  const itemTokens = (options.items ?? []).flatMap(splitChoices);
+  const itemsKnown = itemTokens.length > 0 && itemTokens.every((token) => pickByToken(menu, token, (item) => item.code));
+  if (!itemsKnown) emit(formatMenuChoices(menu));
   const items = await chooseItems(menu, options, emit);
   let mealsEnabled = options.mealsEnabled;
   if (options.askMeals && !mealsEnabled && options.interactive) {
@@ -206,6 +251,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitResult> {
     store,
     items,
     mealsEnabled,
+    reservationDate,
   };
 }
 

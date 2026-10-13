@@ -1,5 +1,6 @@
 import { toolEffect } from "./catalog.js";
 import { formatYuanFromCents } from "./money.js";
+import { userCommand } from "./user-command.js";
 
 export const GUARD_INSTRUCTIONS = [
   "你正在通过 mcd-cooldown 本地网关访问麦当劳 MCP。这不是麦当劳官方客户端。",
@@ -24,7 +25,7 @@ export function holdMessage(input: {
     input.priceNote,
     `参数字段：${input.keys.join(", ") || "无"}`,
     `请求号：${input.id}`,
-    `请用户在本机执行：mcd-cooldown confirm ${input.id}`,
+    `请用户在本机执行：${userCommand()} confirm ${input.id}`,
     "在此之前不要重试。默认只核价。",
   ];
   if (input.quiet) {
@@ -50,7 +51,7 @@ export function quietLabel(start: number, end: number): string {
 }
 
 export function writeAnnotation(description: string | undefined): string {
-  const note = "【mcd-cooldown 拦截】有副作用。网关默认不执行，只接受本机 mcd-cooldown confirm。";
+  const note = `【mcd-cooldown 拦截】有副作用。网关默认不执行，只接受本机 ${userCommand()} confirm。`;
   if (!description) return note;
   if (description.includes("mcd-cooldown 拦截")) return description;
   return `${description} ${note}`;

@@ -125,6 +125,9 @@ export class FixtureBackend implements ToolCaller {
         if (args.storeCode === "CLOSED-STORE") {
           return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
         }
+        if (hasProduct(args, "BREAKFAST-ONLY")) {
+          return { success: false, code: 60006, message: "商品已售罄或不可售，换一个商品或检查orderType/beType" };
+        }
         const price = this.priceFor(args);
         const data: Record<string, unknown> = {
           productOriginalPrice: price,
@@ -175,11 +178,13 @@ export class FixtureBackend implements ToolCaller {
   }
 
   private priceFor(args: Record<string, unknown>): number {
-    if (Array.isArray(args.items) && args.items.some((item) => isRecord(item) && item.productCode === "PRICE_OVER")) {
-      return 20_000;
-    }
+    if (hasProduct(args, "PRICE_OVER")) return 20_000;
     return this.priceCents;
   }
+}
+
+function hasProduct(args: Record<string, unknown>, code: string): boolean {
+  return Array.isArray(args.items) && args.items.some((item) => isRecord(item) && item.productCode === code);
 }
 
 export function assertSamplePayload(result: ToolResult): void {

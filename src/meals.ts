@@ -6,6 +6,7 @@ import type { ToolCaller } from "./mcp/types.js";
 import { orderArgsFromConfig, quoteCreateOrder } from "./order-flow.js";
 import type { HomeStore, MealRecord, MealSlotId } from "./store.js";
 import { formatHm, isQuietHour, parseHm, zonedInstant, zonedParts } from "./time.js";
+import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 
 export interface MealStatus {
@@ -18,6 +19,7 @@ export interface MealStatus {
   pendingId: string | null;
   prepMinutes: number;
   prepSource: "mcp" | "default";
+  note?: string | null;
 }
 
 interface MealWindow {
@@ -51,6 +53,7 @@ export function mealStatusFor(now: Date, config: AppConfig, store: HomeStore): M
     pendingId: usablePending(store, record, now),
     prepMinutes: prep,
     prepSource: record?.prepSource === "mcp" ? "mcp" : "default",
+    note: record?.note ?? null,
   };
 }
 
@@ -102,7 +105,7 @@ export async function prepareMeal(input: {
     });
     if (!limit.ok) record.note = limit.reason;
     else if (isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone) && !input.allowQuiet) {
-      record.note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 mcd-cooldown plan --allow-quiet。`;
+      record.note = `${quoted.note}现在是休息时段，只保留核价，不生成待确认单。仍要准备请执行 ${userCommand()} plan --allow-quiet。`;
     } else {
       const pending = input.store.createPending({
         tool: "create-order",
@@ -112,7 +115,7 @@ export async function prepareMeal(input: {
         ttlMinutes: input.config.pendingTtlMinutes,
       });
       record.pendingId = pending.id;
-      record.note = `${quoted.note}尚未下单。确认：mcd-cooldown confirm ${pending.id}`;
+      record.note = `${quoted.note}尚未下单。确认：${userCommand()} confirm ${pending.id}`;
       input.store.appendAudit({
         at: input.now.toISOString(),
         tool: "create-order",
@@ -148,7 +151,7 @@ export function dismissMeal(
   action: "ate" | "later" | "skip",
   slotArg?: string,
 ): string {
-  if (!config.meals.enabled) throw new UserError("饭点提醒还没开。先运行 mcd-cooldown meals on");
+  if (!config.meals.enabled) throw new UserError(`饭点提醒还没开。先运行 ${userCommand()} meals on`);
   const slot = resolveSlot(now, config, store, slotArg);
   const ymd = zonedParts(now, config.meals.timezone).ymd;
   const existing = store.readMeal(ymd, slot) ?? blankMeal(ymd, slot);
@@ -178,7 +181,7 @@ export function mealCommand(home: string, args: string[]): string {
   }
   if (action === "lunch" || action === "dinner") {
     const parsed = args[1] ? parseHm(args[1]) : null;
-    if (!parsed) throw new UserError("时间要写成 18:30 这种 24 小时格式。例如：mcd-cooldown meals dinner 18:30");
+    if (!parsed) throw new UserError(`时间要写成 18:30 这种 24 小时格式。例如：${userCommand()} meals dinner 18:30`);
     const hm = formatHm(parsed.hour, parsed.minute);
     modifyConfig(home, (draft) => {
       draft.meals[action] = hm;
@@ -186,7 +189,7 @@ export function mealCommand(home: string, args: string[]): string {
     return `${SLOT_COPY[action].label}改到 ${hm}。提醒会按出餐时间提前出现在状态栏。`;
   }
   if (action === "weekends") {
-    if (args[1] !== "on" && args[1] !== "off") throw new UserError("用法：mcd-cooldown meals weekends on");
+    if (args[1] !== "on" && args[1] !== "off") throw new UserError(`用法：${userCommand()} meals weekends on`);
     const weekends = args[1] === "on";
     modifyConfig(home, (draft) => {
       draft.meals.weekends = weekends;
@@ -194,7 +197,7 @@ export function mealCommand(home: string, args: string[]): string {
     return weekends ? "周末也会在状态栏提醒午饭和晚饭。" : "周末不再提醒。工作日保持原样。";
   }
   if (action === "notify") {
-    if (args[1] !== "on" && args[1] !== "off") throw new UserError("用法：mcd-cooldown meals notify on");
+    if (args[1] !== "on" && args[1] !== "off") throw new UserError(`用法：${userCommand()} meals notify on`);
     const notify = args[1] === "on";
     modifyConfig(home, (draft) => {
       draft.meals.notify = notify;
@@ -218,7 +221,7 @@ export function mealCommand(home: string, args: string[]): string {
     return `过了饭点 ${minutes} 分钟后，状态栏不再提这顿。`;
   }
   if (action === "status") return mealsStatusText(loadConfig(home, {}).config);
-  throw new UserError("用法：mcd-cooldown meals on，或 meals lunch 12:00 / dinner 18:30 / weekends on");
+  throw new UserError(`用法：${userCommand()} meals on，或 meals lunch 12:00 / dinner 18:30 / weekends on`);
 }
 
 export function mealsStatusText(config: AppConfig): string {
@@ -231,7 +234,7 @@ export function mealsStatusText(config: AppConfig): string {
     `没有出餐时间时提前 ${meals.prepMinutes} 分钟，饭点后 ${meals.lingerMinutes} 分钟内还看得到`,
     `系统通知：${meals.notify ? "开" : "关"}`,
   ];
-  if (!meals.enabled) lines.push("开启：mcd-cooldown meals on");
+  if (!meals.enabled) lines.push(`开启：${userCommand()} meals on`);
   return lines.join("\n");
 }
 
@@ -326,7 +329,7 @@ function resolveSlot(now: Date, config: AppConfig, store: HomeStore, slotArg?: s
     const window = buildWindow(config, slot, parts.year, parts.month, parts.day, parts.ymd, clampPrep(config.meals.prepMinutes));
     if (window && now.getTime() < window.end.getTime()) return slot;
   }
-  throw new UserError("今天的饭点已经过了。要指定的话：mcd-cooldown ate lunch");
+  throw new UserError(`今天的饭点已经过了。要指定的话：${userCommand()} ate lunch`);
 }
 
 function normalizeSlot(value: string | undefined): MealSlotId | null {
@@ -377,11 +380,12 @@ function readMinutes(raw: string | undefined, allowZero: boolean): number {
 
 function enabledText(config: AppConfig): string {
   const meals = config.meals;
+  const cmd = userCommand();
   return [
     `饭点提醒已开。工作日午饭 ${meals.lunch}，晚饭 ${meals.dinner}。`,
     "到点前会按出餐时间出现在状态栏，先核价，你确认后才下单。",
-    "周末默认不提醒。要连周末也看：mcd-cooldown meals weekends on",
-    "关掉：mcd-cooldown meals off",
-    "已吃、稍后、跳过：mcd-cooldown ate、later、skip",
+    `周末默认不提醒。要连周末也看：${cmd} meals weekends on`,
+    `关掉：${cmd} meals off`,
+    `已吃、稍后、跳过：${cmd} ate、later、skip`,
   ].join("\n");
 }
