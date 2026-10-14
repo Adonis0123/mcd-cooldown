@@ -14,13 +14,17 @@ import {
   assertInitTool,
   extractMeals,
   formatInitSummary,
+  formatMenuChoices,
   nextMealReservationDate,
+  unavailableMealHint,
+  BREAKFAST_HOUR_HINT,
+  BEFORE_NEXT_MEAL_HINT,
   pickByToken,
   runInit,
   type MenuItem,
 } from "../src/init-config.js";
 import { FixtureBackend } from "../src/mcp/fixtures.js";
-import { unwrapPayload } from "../src/mcp/parse.js";
+import { MEAL_UNAVAILABLE_HINT, unwrapPayload } from "../src/mcp/parse.js";
 import type { ToolCaller } from "../src/mcp/types.js";
 import { orderArgsFromConfig } from "../src/order-flow.js";
 import { zonedInstant } from "../src/time.js";
@@ -255,6 +259,54 @@ test("menu extraction keeps category order and falls back to a flat product list
   const flat = extractMeals({ productList: [{ productCode: "FLAT-1", productName: "散点", currentPrice: "9" }] });
   assert.equal(flat[0]?.code, "FLAT-1");
   assert.equal(flat[0]?.name, "散点");
+});
+
+test("menu category headers collapse newlines onto one line", () => {
+  const text = formatMenuChoices([
+    { code: "1001", name: "板烧鸡腿堡", price: "22.00", category: "鸡肉汉堡\n/卷" },
+    { code: "1002", name: "麦辣鸡腿堡", price: "20.00", category: "鸡肉汉堡\r\n/卷" },
+    { code: "2001", name: "玉米杯", price: "8.00", category: "小食  拼盘" },
+    { code: "2002", name: "苹果片", price: null, category: "小食\n拼盘" },
+  ]);
+  const lines = text.split("\n");
+  assert.equal(lines[0], "鸡肉汉堡/卷");
+  assert.equal(lines.filter((line) => line === "鸡肉汉堡/卷").length, 1);
+  assert.match(lines[1] ?? "", /^1\. 板烧鸡腿堡/);
+  assert.equal(lines.includes("小食拼盘") || lines.includes("小食 拼盘"), true);
+  assert.equal(text.includes("\n/卷"), false);
+  const spaced = lines.find((line) => line.startsWith("小食"));
+  assert.equal(spaced, "小食 拼盘");
+});
+
+test("60006 wording follows the next lunch and dinner clock", () => {
+  const morning = zonedInstant(2026, 10, 14, 8, 30, "Asia/Shanghai");
+  const breakfast = unavailableMealHint(morning);
+  assert.equal(breakfast, BREAKFAST_HOUR_HINT);
+  assert.match(breakfast, /早餐时段/);
+  assert.equal(breakfast.includes("换一份"), false);
+
+  const nearLunch = zonedInstant(2026, 10, 14, 11, 50, "Asia/Shanghai");
+  assert.equal(unavailableMealHint(nearLunch), MEAL_UNAVAILABLE_HINT);
+
+  const afternoon = zonedInstant(2026, 10, 14, 15, 0, "Asia/Shanghai");
+  const beforeDinner = unavailableMealHint(afternoon, {
+    timezone: "Asia/Shanghai",
+    lunch: "12:00",
+    dinner: "18:30",
+    prepMinutes: 20,
+    lingerMinutes: 45,
+  });
+  assert.equal(beforeDinner, BEFORE_NEXT_MEAL_HINT);
+  assert.equal(beforeDinner.includes("早餐时段"), false);
+
+  const custom = unavailableMealHint(zonedInstant(2026, 10, 14, 16, 50, "Asia/Shanghai"), {
+    timezone: "Asia/Shanghai",
+    lunch: "11:30",
+    dinner: "17:00",
+    prepMinutes: 15,
+    lingerMinutes: 30,
+  });
+  assert.equal(custom, MEAL_UNAVAILABLE_HINT);
 });
 
 test("a caller that rejects write tools can still complete init", async () => {

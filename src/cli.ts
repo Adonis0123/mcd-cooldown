@@ -11,7 +11,7 @@ import { confirmPending, denyPending } from "./confirm.js";
 import { formatStatusline, preparePlan, rememberSession, runHook } from "./cooldown.js";
 import { dismissMeal, mealCommand, mealStatusFor, spawnDesktopNotify } from "./meals.js";
 import { renderDemo } from "./demo.js";
-import { runDoctor } from "./doctor.js";
+import { fixtureStoreRefusal, runDoctor } from "./doctor.js";
 import { Guard } from "./guard.js";
 import { fixtureHttpHandler } from "./mcp/fixture-http.js";
 import { isRpcRequest, listenLoopback, readBody, sendJson } from "./mcp/http.js";
@@ -166,7 +166,12 @@ async function main(): Promise<void> {
       await serveHttp(ctx, portOf(parsed.flags), true);
       return;
     case "plan": {
-      const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
+      const mock = flagBool(parsed.flags, "mock");
+      if (!mock) {
+        const fixtureStore = fixtureStoreRefusal(ctx.config.store?.storeCode);
+        if (fixtureStore) throw new UserError(fixtureStore);
+      }
+      const caller = makeCaller(ctx, mock);
       const session = rememberSession(ctx.store, {}, now());
       const plan = await preparePlan({
         caller,

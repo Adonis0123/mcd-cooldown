@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { confirmPending } from "../src/confirm.js";
 import { assertHomeOutside, exampleConfigText, loadConfig } from "../src/config.js";
 import { preparePlan, runHook } from "../src/cooldown.js";
-import { extractStores, runDoctor } from "../src/doctor.js";
+import { extractStores, isFixtureStoreCode, runDoctor } from "../src/doctor.js";
+import { BREAKFAST_HOUR_HINT, BEFORE_NEXT_MEAL_HINT } from "../src/init-config.js";
 import { prepareMeal } from "../src/meals.js";
 import { FixtureBackend } from "../src/mcp/fixtures.js";
 import { businessFailed, MEAL_UNAVAILABLE_HINT, unwrapPayload } from "../src/mcp/parse.js";
@@ -16,7 +17,7 @@ import { calculatePriceArgs, orderArgsFromConfig, quoteCreateOrder } from "../sr
 import { UserError } from "../src/user-error.js";
 import { formatAuditLine, formatPendingLine } from "../src/present.js";
 import { HomeStore } from "../src/store.js";
-import { formatZonedDateTime } from "../src/time.js";
+import { formatZonedDateTime, zonedInstant } from "../src/time.js";
 import { validateCreateOrder } from "../src/money.js";
 
 const quiet = new Date("2026-10-10T16:30:00.000Z");
@@ -162,8 +163,10 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
   const plan = await preparePlan({ caller: backend, store, config, now: afternoon, session: { windows: [], durationMs: null } });
   assert.equal(plan.pendingId, null);
   assert.equal(plan.quoteCents, null);
-  assert.equal(plan.note, MEAL_UNAVAILABLE_HINT);
+  assert.equal(plan.note, BEFORE_NEXT_MEAL_HINT);
+  assert.equal(plan.note.includes("换一份"), false);
   assert.equal(plan.note.includes("orderType"), false);
+  assert.equal(backend.calls.some((call) => call.name === "calculate-price" && "reservationDate" in call.args), false);
 
   const mealHome = mkdtempSync(join(tmpdir(), "mcd-unavailable-hook-"));
   const mealStore = new HomeStore(mealHome);
@@ -177,7 +180,9 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
     now: afternoon,
     prepare: true,
   });
-  assert.match(hook, /重新跑 init/);
+  assert.match(hook, /不必重新跑 init/);
+  assert.match(hook, /还没开卖/);
+  assert.equal(hook.includes("换一份"), false);
   assert.equal(hook.includes("商品已售罄"), false);
   assert.equal(hookBackend.called("create-order"), 0);
 
@@ -198,13 +203,108 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
     () => confirmPending(store, backend, config, pending.id, { allowQuiet: false, retry: false, now: afternoon, token: null }),
     (error: unknown) => {
       assert.ok(error instanceof UserError);
-      assert.match(error.message, /重新跑 init/);
+      assert.match(error.message, /重新跑 init 换一份/);
       assert.equal(error.message.includes("商品已售罄"), false);
       assert.equal(error.message.includes("orderType"), false);
       return true;
     },
   );
   assert.equal(backend.called("create-order"), 0);
+});
+
+test("morning plan explains 60006 without asking for another init", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-breakfast-"));
+  const store = new HomeStore(home);
+  store.ensure();
+  const backend = new FixtureBackend();
+  const config = loadConfig(home, {}).config;
+  config.meals.lunch = "12:00";
+  config.meals.dinner = "18:30";
+  config.store = { storeCode: "1400123", beType: 1, orderType: 1, takeWayCode: "eat-in" };
+  config.usual = { label: "午饭", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] };
+  const morning = zonedInstant(2026, 10, 14, 8, 30, "Asia/Shanghai");
+  const plan = await preparePlan({ caller: backend, store, config, now: morning, session: { windows: [], durationMs: null } });
+  assert.equal(plan.pendingId, null);
+  assert.equal(plan.quoteCents, null);
+  assert.equal(plan.note, BREAKFAST_HOUR_HINT);
+  assert.match(plan.note, /早餐时段/);
+  assert.match(plan.note, /还没开卖/);
+  assert.match(plan.note, /饭点提醒会在饭点前核价/);
+  assert.match(plan.note, /不必重新跑 init/);
+  assert.equal(plan.note.includes("换一份"), false);
+  assert.equal(plan.note.includes("商品已售罄"), false);
+  const priced = backend.calls.find((call) => call.name === "calculate-price");
+  assert.ok(priced);
+  assert.equal("reservationDate" in priced.args, false);
+  assert.equal(backend.called("create-order"), 0);
+
+  const nearLunch = zonedInstant(2026, 10, 14, 11, 50, "Asia/Shanghai");
+  const near = await preparePlan({
+    caller: new FixtureBackend(),
+    store,
+    config,
+    now: nearLunch,
+    session: { windows: [], durationMs: null },
+  });
+  assert.equal(near.note, MEAL_UNAVAILABLE_HINT);
+  assert.match(near.note, /重新跑 init 换一份/);
+});
+
+test("real doctor rejects a SAMPLE store and still accepts a numeric one", async () => {
+  assert.equal(isFixtureStoreCode("SAMPLE-STORE"), true);
+  assert.equal(isFixtureStoreCode("sample-store-2"), true);
+  assert.equal(isFixtureStoreCode("CLOSED-STORE"), true);
+  assert.equal(isFixtureStoreCode("1400123"), false);
+  const token = "doctor-fixture-token";
+  const home = mkdtempSync(join(tmpdir(), "mcd-sample-doc-"));
+  const config = loadConfig(home, {}).config;
+  config.store = { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1 };
+  const backend = new FixtureBackend();
+  const blocked = await runDoctor({
+    caller: backend,
+    token,
+    tokenSource: "环境变量 MCD_MCP_TOKEN",
+    warnings: [],
+    config,
+    workspace: null,
+    mock: false,
+  });
+  assert.equal(blocked.ok, false);
+  const blockedText = blocked.lines.join("\n");
+  assert.match(blockedText, /init --mock/);
+  assert.match(blockedText, /样例门店/);
+  assert.match(blockedText, /SAMPLE-STORE/);
+  assert.match(blockedText, /真实 Token/);
+  assert.equal(blockedText.includes(token), false);
+  assert.deepEqual(blocked.called, []);
+  assert.equal(backend.calls.length, 0);
+
+  const mocked = await runDoctor({
+    caller: new FixtureBackend(),
+    token: null,
+    tokenSource: "未配置",
+    warnings: [],
+    config,
+    workspace: null,
+    mock: true,
+  });
+  assert.equal(mocked.ok, true);
+  assert.equal(mocked.lines.join("\n").includes("样例门店（SAMPLE-STORE）"), false);
+
+  config.store = { storeCode: "1400123", beType: 1, orderType: 1 };
+  const numeric = new FixtureBackend();
+  const allowed = await runDoctor({
+    caller: numeric,
+    token,
+    tokenSource: "环境变量 MCD_MCP_TOKEN",
+    warnings: [],
+    config,
+    workspace: null,
+    mock: false,
+  });
+  assert.equal(allowed.ok, true, allowed.lines.join("\n"));
+  assert.equal(allowed.lines.join("\n").includes(token), false);
+  assert.equal(numeric.called("now-time-info"), 1);
 });
 
 test("pickup config omits beCode and drive-thru still requires it", () => {

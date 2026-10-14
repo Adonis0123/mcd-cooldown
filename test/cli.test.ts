@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -60,6 +60,49 @@ test("demo, mock doctor, and loopback refusal work from the cli", async () => {
   const exposed = await run(["serve", "--host", "0.0.0.0"], env);
   assert.notEqual(exposed.code, 0);
   assert.match(exposed.stderr, /127\.0\.0\.1/);
+});
+
+test("real plan and doctor reject a SAMPLE store left by init --mock", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-sample-"));
+  const token = "plan-fixture-token";
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      store: { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "样例", items: [{ productCode: "SAMPLE-001", quantity: 1 }] },
+    }),
+  );
+  const env = {
+    ...process.env,
+    MCD_HOME: home,
+    MCD_MCP_TOKEN: token,
+    MCD_MCP_URL: "http://127.0.0.1:1",
+    MCD_NOW: "2026-10-14T05:20:00.000Z",
+  };
+  const plan = await run(["plan"], env);
+  assert.notEqual(plan.code, 0);
+  assert.match(plan.stderr, /init --mock/);
+  assert.match(plan.stderr, /样例门店/);
+  assert.match(plan.stderr, /SAMPLE-STORE/);
+  assert.match(plan.stderr, /真实 Token/);
+  assert.equal(plan.stderr.includes(token), false);
+  assert.equal(plan.stdout.includes(token), false);
+
+  const doctor = await run(["doctor"], env);
+  assert.notEqual(doctor.code, 0);
+  const doctorText = `${doctor.stdout}\n${doctor.stderr}`;
+  assert.match(doctorText, /init --mock/);
+  assert.match(doctorText, /样例门店/);
+  assert.equal(doctorText.includes(token), false);
+
+  const mockPlan = await run(["plan", "--mock"], env);
+  assert.equal(mockPlan.code, 0, mockPlan.stderr);
+  assert.equal(mockPlan.stdout.includes(token), false);
+  assert.equal(mockPlan.stderr.includes("样例门店"), false);
+
+  const mockDoctor = await run(["doctor", "--mock"], { ...env, MCD_MCP_TOKEN: "" });
+  assert.equal(mockDoctor.code, 0, mockDoctor.stderr);
+  assert.equal(mockDoctor.stdout.includes("样例门店（SAMPLE-STORE）"), false);
 });
 
 test("stdio guard holds create-order and confirm submits it once", async () => {
