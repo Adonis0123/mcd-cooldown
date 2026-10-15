@@ -105,6 +105,37 @@ test("real plan and doctor reject a SAMPLE store left by init --mock", async () 
   assert.equal(mockDoctor.stdout.includes("样例门店（SAMPLE-STORE）"), false);
 });
 
+test("morning plan exits 0 and says the saved meal is ready", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-breakfast-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      store: { storeCode: "1400123", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "午饭", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] },
+    }),
+  );
+  const env = {
+    ...process.env,
+    MCD_HOME: home,
+    MCD_MCP_TOKEN: "",
+    MCD_NOW: "2026-10-14T00:30:00.000Z",
+  };
+  const plan = await run(["plan", "--mock"], env);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.match(plan.stdout, /早餐时段/);
+  assert.match(plan.stdout, /门店和常点已经就绪/);
+  assert.match(plan.stdout, /下一顿饭点提醒前会核价/);
+  assert.match(plan.stdout, /doctor --city/);
+  assert.match(plan.stdout, /不必重新跑 init/);
+  assert.equal(plan.stdout.includes("换一份"), false);
+  assert.equal(plan.stdout.includes("重新跑 init 换"), false);
+
+  const nearLunch = await run(["plan", "--mock"], { ...env, MCD_NOW: "2026-10-14T03:50:00.000Z" });
+  assert.equal(nearLunch.code, 0, nearLunch.stderr);
+  assert.match(nearLunch.stdout, /重新跑 init 换一份/);
+  assert.equal(nearLunch.stdout.includes("门店和常点已经就绪"), false);
+});
+
 test("stdio guard holds create-order and confirm submits it once", async () => {
   const home = mkdtempSync(join(tmpdir(), "mcd-stdio-"));
   const handler = fixtureHttpHandler();

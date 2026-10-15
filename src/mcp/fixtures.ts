@@ -96,31 +96,7 @@ export class FixtureBackend implements ToolCaller {
         if (args.storeCode === "CLOSED-STORE") {
           return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
         }
-        return {
-          categories: [
-            {
-              name: "人气热卖",
-              meals: [
-                { code: "SAMPLE-001", tags: ["样例"] },
-                { code: "SAMPLE-002", tags: ["样例"] },
-              ],
-            },
-          ],
-          meals: {
-            "SAMPLE-001": {
-              name: "示例套餐",
-              currentPrice: "36.50",
-              originalPrice: "36.50",
-              canWithOrder: false,
-            },
-            "SAMPLE-002": {
-              name: "示例玉米杯",
-              currentPrice: "8.00",
-              originalPrice: "8.00",
-              canWithOrder: false,
-            },
-          },
-        };
+        return sampleMealMenu();
       case "calculate-price": {
         if (args.storeCode === "CLOSED-STORE") {
           return { success: false, code: 600057, message: "门店可能已关闭或不在营业时间" };
@@ -181,6 +157,31 @@ export class FixtureBackend implements ToolCaller {
     if (hasProduct(args, "PRICE_OVER")) return 20_000;
     return this.priceCents;
   }
+}
+
+function sampleMealMenu(): {
+  categories: Array<{ name: string; meals: Array<{ code: string; tags: string[] }> }>;
+  meals: Record<string, { name: string; currentPrice: string; originalPrice: string; canWithOrder: boolean }>;
+} {
+  const featured = [
+    { code: "SAMPLE-001", name: "示例套餐", price: "36.50" },
+    { code: "SAMPLE-002", name: "示例玉米杯", price: "8.00" },
+  ];
+  const rest = Array.from({ length: 30 }, (_, index) => {
+    const code = `SAMPLE-${String(index + 3).padStart(3, "0")}`;
+    return { code, name: `示例餐品${code.slice("SAMPLE-".length)}`, price: "12.00" };
+  });
+  const meals: Record<string, { name: string; currentPrice: string; originalPrice: string; canWithOrder: boolean }> = {};
+  for (const item of [...featured, ...rest]) {
+    meals[item.code] = { name: item.name, currentPrice: item.price, originalPrice: item.price, canWithOrder: false };
+  }
+  return {
+    categories: [
+      { name: "人气热卖", meals: featured.map((item) => ({ code: item.code, tags: ["样例"] })) },
+      { name: "正餐", meals: rest.map((item) => ({ code: item.code, tags: ["样例"] })) },
+    ],
+    meals,
+  };
 }
 
 function hasProduct(args: Record<string, unknown>, code: string): boolean {

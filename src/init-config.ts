@@ -30,6 +30,7 @@ export interface RunInitOptions {
   mealsEnabled: boolean;
   askMeals: boolean;
   interactive: boolean;
+  menuAll?: boolean;
   prompter?: Prompter;
   emit?: (line: string) => void;
   now?: Date;
@@ -152,6 +153,22 @@ export function formatMenuChoices(items: readonly MenuItem[]): string {
   return lines.join("\n");
 }
 
+/** Picking list stays short. Item numbers stay the full-menu indexes, so `--item 3` still matches. */
+export const MENU_PREVIEW_LIMIT = 20;
+
+export function formatMenuListing(items: readonly MenuItem[], menuAll = false, interactive = false): string {
+  const shown = menuAll ? items : items.slice(0, MENU_PREVIEW_LIMIT);
+  const body = formatMenuChoices(shown);
+  const hint = menuPickHint(shown.length, items.length, interactive && !menuAll);
+  return body ? `${body}\n${hint}` : hint;
+}
+
+function menuPickHint(shown: number, total: number, offerTypedAll: boolean): string {
+  const range = shown < total ? `只列出前 ${shown} 项，共 ${total} 项。` : "";
+  const all = offerTypedAll ? "--menu-all 列出全部菜单，或输入 all。" : "--menu-all 列出全部菜单。";
+  return `${range}${all}--item <编码> 可重复，写入配置。`;
+}
+
 export function formatInitSummary(file: string, result: RunInitResult): string {
   const cmd = userCommand();
   const items = result.items.map((item) => `${item.name}（${item.code}）`).join("、");
@@ -173,12 +190,15 @@ export function formatInitSummary(file: string, result: RunInitResult): string {
  * Saved lunch/dinner items are not on sale yet. Re-running init would query the
  * same next meal and save the same items.
  */
+const READY_BEFORE_MEAL =
+  "门店和常点已经就绪，下一顿饭点提醒前会核价，要再核对门店可运行 doctor --city 城市 --keyword 关键词。";
+
 export const BREAKFAST_HOUR_HINT =
-  "现在还是早餐时段，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。";
+  `现在还是早餐时段，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。${READY_BEFORE_MEAL}`;
 
 /** Before the next configured meal, but not the same-day breakfast gap before lunch. */
 export const BEFORE_NEXT_MEAL_HINT =
-  "下一顿午饭或晚饭还没到，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。";
+  `下一顿午饭或晚饭还没到，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。${READY_BEFORE_MEAL}`;
 
 type MealClock = Pick<MealsSettings, "timezone" | "lunch" | "dinner" | "prepMinutes" | "lingerMinutes">;
 
@@ -288,7 +308,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitResult> {
   }
   const itemTokens = (options.items ?? []).flatMap(splitChoices);
   const itemsKnown = itemTokens.length > 0 && itemTokens.every((token) => pickByToken(menu, token, (item) => item.code));
-  if (!itemsKnown) emit(formatMenuChoices(menu));
+  if (!itemsKnown) emit(formatMenuListing(menu, options.menuAll === true || itemTokens.length > 0, options.interactive));
   const items = await chooseItems(menu, options, emit);
   let mealsEnabled = options.mealsEnabled;
   if (options.askMeals && !mealsEnabled && options.interactive) {
@@ -376,14 +396,25 @@ async function chooseItems(menu: readonly MenuItem[], options: RunInitOptions, e
   if (!options.interactive) {
     throw new UserError("非交互环境请加上 --item <序号或餐品编码>，可以重复。上面是菜单。没有写入配置，也没有下单。", 2);
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  let misses = 0;
+  while (misses < 5) {
     const answer = await askOnce("选常点的餐品，输入序号或编码，多个用逗号或空格分开。直接回车选 1：", options);
+    if (isMenuAllAnswer(answer)) {
+      emit(formatMenuListing(menu, true));
+      continue;
+    }
     const tokens = answer.trim() ? splitChoices(answer) : ["1"];
     const missing = tokens.filter((token) => !pickByToken(menu, token, (item) => item.code));
     if (missing.length === 0) return resolveItems(menu, tokens);
+    misses += 1;
     emit(`菜单里没有 ${missing.join("、")}，请再选一次。`);
   }
   throw new UserError("多次没有选中餐品。没有写入配置，也没有下单。");
+}
+
+function isMenuAllAnswer(answer: string): boolean {
+  const text = answer.trim().toLowerCase();
+  return text === "all" || text === "全部" || text === "--menu-all";
 }
 
 function resolveItems(menu: readonly MenuItem[], tokens: string[]): MenuItem[] {
