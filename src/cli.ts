@@ -49,7 +49,7 @@ function helpText(): string {
   ${cmd} ate
   ${cmd} later
   ${cmd} skip
-  ${cmd} init [--mock] [--meals] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
+  ${cmd} init [--mock] [--meals] [--menu-all] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
   ${cmd} setup claude [--print | --dry-run]
   ${cmd} demo
   ${cmd} mock [--port 39217]
@@ -108,6 +108,7 @@ async function main(): Promise<void> {
           mealsEnabled: mealsFlag,
           askMeals: interactive && !mealsFlag,
           interactive,
+          menuAll: flagBool(parsed.flags, "menu-all"),
           prompter,
           now: now(),
           emit: (line) => process.stdout.write(`${scrub(line)}\n`),

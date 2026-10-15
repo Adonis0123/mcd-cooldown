@@ -164,6 +164,8 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
   assert.equal(plan.pendingId, null);
   assert.equal(plan.quoteCents, null);
   assert.equal(plan.note, BEFORE_NEXT_MEAL_HINT);
+  assert.match(plan.note, /门店和常点已经就绪/);
+  assert.match(plan.note, /doctor --city/);
   assert.equal(plan.note.includes("换一份"), false);
   assert.equal(plan.note.includes("orderType"), false);
   assert.equal(backend.calls.some((call) => call.name === "calculate-price" && "reservationDate" in call.args), false);
@@ -182,6 +184,8 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
   });
   assert.match(hook, /不必重新跑 init/);
   assert.match(hook, /还没开卖/);
+  assert.match(hook, /门店和常点已经就绪/);
+  assert.match(hook, /doctor --city/);
   assert.equal(hook.includes("换一份"), false);
   assert.equal(hook.includes("商品已售罄"), false);
   assert.equal(hookBackend.called("create-order"), 0);
@@ -231,7 +235,11 @@ test("morning plan explains 60006 without asking for another init", async () => 
   assert.match(plan.note, /还没开卖/);
   assert.match(plan.note, /饭点提醒会在饭点前核价/);
   assert.match(plan.note, /不必重新跑 init/);
+  assert.match(plan.note, /门店和常点已经就绪/);
+  assert.match(plan.note, /下一顿饭点提醒前会核价/);
+  assert.match(plan.note, /doctor --city/);
   assert.equal(plan.note.includes("换一份"), false);
+  assert.equal(plan.note.includes("重新跑 init 换"), false);
   assert.equal(plan.note.includes("商品已售罄"), false);
   const priced = backend.calls.find((call) => call.name === "calculate-price");
   assert.ok(priced);

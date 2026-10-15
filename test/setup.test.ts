@@ -15,6 +15,8 @@ import {
   extractMeals,
   formatInitSummary,
   formatMenuChoices,
+  formatMenuListing,
+  MENU_PREVIEW_LIMIT,
   nextMealReservationDate,
   unavailableMealHint,
   BREAKFAST_HOUR_HINT,
@@ -72,6 +74,7 @@ test("flags accept a store and repeated meal items", () => {
   assert.deepEqual(flagList(parsed.flags, "item"), ["A", "B"]);
   assert.equal(flagBool(parsed.flags, "meals"), true);
   assert.equal(flagBool(parsed.flags, "mock"), true);
+  assert.equal(flagBool(parseArgs(["init", "--menu-all"]).flags, "menu-all"), true);
   const setup = parseArgs(["setup", "claude", "--dry-run", "--settings", "/tmp/claude-settings.json"]);
   assert.deepEqual(setup.positionals, ["claude"]);
   assert.equal(flagBool(setup.flags, "dry-run"), true);
@@ -249,13 +252,15 @@ test("menu extraction keeps category order and falls back to a flat product list
   const backend = new FixtureBackend();
   const payload = unwrapPayload(await backend.callTool("query-meals", { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1 }));
   const meals = extractMeals(payload);
-  assert.deepEqual(
-    meals.map((item) => item.code),
-    ["SAMPLE-001", "SAMPLE-002"],
-  );
+  assert.equal(meals[0]?.code, "SAMPLE-001");
+  assert.equal(meals[1]?.code, "SAMPLE-002");
+  assert.equal(meals.length, 32);
+  assert.equal(meals[20]?.code, "SAMPLE-021");
+  assert.equal(meals[31]?.code, "SAMPLE-032");
   assert.equal(meals[0]?.name, "示例套餐");
   assert.equal(meals[0]?.price, "36.50");
   assert.equal(meals[0]?.category, "人气热卖");
+  assert.equal(meals[2]?.category, "正餐");
   const flat = extractMeals({ productList: [{ productCode: "FLAT-1", productName: "散点", currentPrice: "9" }] });
   assert.equal(flat[0]?.code, "FLAT-1");
   assert.equal(flat[0]?.name, "散点");
@@ -283,7 +288,11 @@ test("60006 wording follows the next lunch and dinner clock", () => {
   const breakfast = unavailableMealHint(morning);
   assert.equal(breakfast, BREAKFAST_HOUR_HINT);
   assert.match(breakfast, /早餐时段/);
+  assert.match(breakfast, /门店和常点已经就绪/);
+  assert.match(breakfast, /下一顿饭点提醒前会核价/);
+  assert.match(breakfast, /doctor --city/);
   assert.equal(breakfast.includes("换一份"), false);
+  assert.equal(breakfast.includes("重新跑 init 换"), false);
 
   const nearLunch = zonedInstant(2026, 10, 14, 11, 50, "Asia/Shanghai");
   assert.equal(unavailableMealHint(nearLunch), MEAL_UNAVAILABLE_HINT);
@@ -297,7 +306,10 @@ test("60006 wording follows the next lunch and dinner clock", () => {
     lingerMinutes: 45,
   });
   assert.equal(beforeDinner, BEFORE_NEXT_MEAL_HINT);
+  assert.match(beforeDinner, /门店和常点已经就绪/);
+  assert.match(beforeDinner, /doctor --city/);
   assert.equal(beforeDinner.includes("早餐时段"), false);
+  assert.equal(beforeDinner.includes("换一份"), false);
 
   const custom = unavailableMealHint(zonedInstant(2026, 10, 14, 16, 50, "Asia/Shanghai"), {
     timezone: "Asia/Shanghai",
@@ -535,9 +547,13 @@ test("prepare compiles the cli, and the quick start no longer asks for a hand ed
   assert.match(readme, /## 三步开始/);
   const quick = readme.slice(readme.indexOf("## 三步开始"), readme.indexOf("## 它做什么"));
   assert.match(quick, /npm install && npm link/);
+  assert.match(quick, /node dist\/src\/cli\.js demo/);
+  assert.match(quick, /node dist\/src\/cli\.js doctor --mock/);
+  assert.match(quick, /node dist\/src\/cli\.js init/);
+  assert.match(quick, /node dist\/src\/cli\.js setup claude/);
   assert.match(quick, /mcd-cooldown init && mcd-cooldown setup claude/);
+  assert.match(quick, /--menu-all/);
   assert.deepEqual(quick.match(/^\d+\. /gm), ["1. ", "2. ", "3. "]);
-  assert.equal(readme.includes("node dist/src/cli.js"), false);
   assert.match(readme, /dist\/src\/cli\.js statusline/);
   assert.equal(readme.includes("把 YOUR_ 开头的占位换成"), false);
 });
@@ -631,5 +647,121 @@ test("cli setup claude is idempotent and --print does not write", async () => {
 
   const help = await run(["help"], env);
   assert.match(help.stdout, /setup claude/);
+  assert.match(help.stdout, /--menu-all/);
   assert.match(help.stdout, /不会下单/);
+});
+
+test("init lists the first 20 menu items unless --menu-all, and a resolved --item stays quiet", async () => {
+  const lines: string[] = [];
+  await assert.rejects(
+    () =>
+      runInit({
+        caller: new FixtureBackend(),
+        city: "深圳",
+        keyword: "科技园",
+        store: "1",
+        ...quietInit,
+        emit: (line) => lines.push(line),
+      }),
+    /--item/,
+  );
+  const text = lines.join("\n");
+  const itemLines = text.split("\n").filter((line) => /^\d+\. /.test(line));
+  assert.equal(itemLines.length, MENU_PREVIEW_LIMIT);
+  assert.match(text, /SAMPLE-001/);
+  assert.match(text, /SAMPLE-020/);
+  assert.equal(text.includes("SAMPLE-021"), false);
+  assert.match(text, /--menu-all/);
+  assert.match(text, /--item <编码>/);
+  assert.match(text, /写入配置/);
+
+  const allLines: string[] = [];
+  await assert.rejects(
+    () =>
+      runInit({
+        caller: new FixtureBackend(),
+        city: "深圳",
+        keyword: "科技园",
+        store: "1",
+        menuAll: true,
+        ...quietInit,
+        emit: (line) => allLines.push(line),
+      }),
+    /--item/,
+  );
+  const all = allLines.join("\n");
+  assert.match(all, /SAMPLE-021/);
+  assert.match(all, /SAMPLE-032/);
+  assert.equal(all.split("\n").filter((line) => /^\d+\. /.test(line)).length, 32);
+
+  const quiet: string[] = [];
+  const wrote = await runInit({
+    caller: new FixtureBackend(),
+    city: "深圳",
+    keyword: "科技园",
+    store: "1",
+    items: ["SAMPLE-032"],
+    menuAll: true,
+    ...quietInit,
+    emit: (line) => quiet.push(line),
+  });
+  assert.equal(quiet.length, 0);
+  assert.equal(wrote.items[0]?.code, "SAMPLE-032");
+  assert.equal(wrote.called.includes("create-order"), false);
+
+  const preview = formatMenuListing(
+    Array.from({ length: 25 }, (_, index) => ({
+      code: `P-${index + 1}`,
+      name: `餐${index + 1}`,
+      price: null,
+      category: index < 2 ? "人气热卖" : "正餐",
+    })),
+  );
+  assert.equal(preview.split("\n").filter((line) => /^\d+\. /.test(line)).length, MENU_PREVIEW_LIMIT);
+  assert.equal(preview.includes("P-21"), false);
+  assert.match(preview, /--menu-all/);
+  assert.match(formatMenuListing([{ code: "ONLY", name: "只有一份", price: null, category: null }], true), /ONLY/);
+});
+
+test("interactive init can reveal the full menu without counting it as a bad pick", async () => {
+  const lines: string[] = [];
+  const answers = ["all", "SAMPLE-032"];
+  const result = await runInit({
+    caller: new FixtureBackend(),
+    city: "深圳",
+    keyword: "科技园",
+    store: "1",
+    mealsEnabled: false,
+    askMeals: false,
+    interactive: true,
+    now: zonedInstant(2026, 10, 13, 9, 50, "Asia/Shanghai"),
+    emit: (line) => lines.push(line),
+    prompter: { ask: async () => answers.shift() ?? "" },
+  });
+  assert.equal(lines[0]?.includes("SAMPLE-021"), false);
+  assert.match(lines[0] ?? "", /输入 all/);
+  assert.match(lines[1] ?? "", /SAMPLE-032/);
+  assert.equal(result.items[0]?.code, "SAMPLE-032");
+  assert.equal(result.called.includes("create-order"), false);
+});
+
+test("cli init --mock prints a short menu by default and the full menu with --menu-all", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-menu-"));
+  const env = envOf(home);
+  const configPath = join(env.MCD_HOME ?? "", "config.json");
+  const short = await run(["init", "--mock", "--city", "深圳", "--keyword", "科技园", "--store", "1"], env);
+  assert.equal(short.code, 2, short.stderr);
+  assert.match(short.stdout, /SAMPLE-001/);
+  assert.match(short.stdout, /SAMPLE-020/);
+  assert.equal(short.stdout.includes("SAMPLE-021"), false);
+  assert.match(short.stdout, /--menu-all/);
+  assert.match(short.stdout, /--item/);
+  assert.match(short.stderr, /--item/);
+  assert.equal(existsSync(configPath), false);
+
+  const full = await run(["init", "--mock", "--city", "深圳", "--keyword", "科技园", "--store", "1", "--menu-all"], env);
+  assert.equal(full.code, 2, full.stderr);
+  assert.match(full.stdout, /SAMPLE-021/);
+  assert.match(full.stdout, /SAMPLE-032/);
+  assert.equal(existsSync(configPath), false);
 });
