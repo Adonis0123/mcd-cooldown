@@ -4,6 +4,7 @@ import { mealStatusFor, prepareMeal, type MealStatus } from "./meals.js";
 import { cnyToCents, formatYuanFromCents, moneyDecision, validateCreateOrder } from "./money.js";
 import { MEAL_UNAVAILABLE_HINT, payloadRecord, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
+import { unavailableMealHint } from "./init-config.js";
 import { orderArgsFromConfig, quoteCreateOrder } from "./order-flow.js";
 import { asText } from "./is.js";
 import { describeSchedule } from "./schedule.js";
@@ -155,6 +156,9 @@ export async function preparePlan(input: {
       }
     }
   }
+  if (note.includes(MEAL_UNAVAILABLE_HINT)) {
+    note = note.replace(MEAL_UNAVAILABLE_HINT, unavailableMealHint(input.now, input.config.meals));
+  }
   const plan: PlanState = {
     preparedAt: input.now.toISOString(),
     headline: schedule.headline,
@@ -245,6 +249,7 @@ export async function runHook(input: {
 function priceSentence(cents: number | null, note: string | null | undefined, empty: string): string {
   if (cents != null) return `已按你保存的份量核价 ¥${formatYuanFromCents(cents)}，尚未下单。`;
   if (note?.includes(MEAL_UNAVAILABLE_HINT)) return `${MEAL_UNAVAILABLE_HINT}程序没有下单。`;
+  if (note?.includes("不必重新跑 init")) return `${note.trim()}程序没有下单。`;
   return empty;
 }
 

@@ -6,6 +6,7 @@ import { businessFailed, payloadRecord, textOf, unwrapPayload } from "./mcp/pars
 import type { ToolCaller } from "./mcp/types.js";
 import { scrubForLog } from "./redact.js";
 import { UpstreamError } from "./mcp/client.js";
+import { userCommand } from "./user-command.js";
 
 const REQUIRED: Array<{ name: string; args: Record<string, unknown> }> = [
   { name: "now-time-info", args: {} },
@@ -44,6 +45,13 @@ export async function runDoctor(input: DoctorInput): Promise<DoctorReport> {
   if (!input.mock && !input.token) {
     lines.push("还没有 Token。在本机执行 export MCD_MCP_TOKEN=... 后重新运行 doctor。不要把 Token 写进仓库。");
     return { ok: false, lines, called };
+  }
+  if (!input.mock) {
+    const fixtureStore = fixtureStoreRefusal(input.config.store?.storeCode);
+    if (fixtureStore) {
+      lines.push(fixtureStore);
+      return { ok: false, lines, called };
+    }
   }
   if (input.token && input.workspace) {
     const leaks = findTokenInTree(input.workspace, input.token);
@@ -121,6 +129,20 @@ async function callRead(
   } catch (error) {
     return { ok: false, line: `${name}：${failLine(error, input.token)}` };
   }
+}
+
+/** True for init --mock store codes and the other fixture store ids in this repo. */
+export function isFixtureStoreCode(storeCode: string): boolean {
+  const code = storeCode.trim();
+  if (!code || /^\d+$/.test(code)) return false;
+  if (/^SAMPLE-/i.test(code)) return true;
+  if (/SAMPLE/i.test(code)) return true;
+  return /^CLOSED-STORE$/i.test(code);
+}
+
+export function fixtureStoreRefusal(storeCode: string | undefined): string | null {
+  if (!storeCode || !isFixtureStoreCode(storeCode)) return null;
+  return `配置里还是 init --mock 写下的样例门店（${storeCode.trim()}）。请用真实 Token 重新运行 ${userCommand()} init。不要把 Token 写进仓库或对话。`;
 }
 
 export interface StoreHit {

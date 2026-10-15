@@ -1,8 +1,8 @@
 import { toolEffect } from "./catalog.js";
-import { defaultMeals, filledConfigText, type StoreConfig, type UsualConfig } from "./config.js";
+import { defaultMeals, filledConfigText, type MealsSettings, type StoreConfig, type UsualConfig } from "./config.js";
 import { extractStores, type StoreHit } from "./doctor.js";
 import { asText, isRecord } from "./is.js";
-import { businessFailed, payloadRecord, unwrapPayload } from "./mcp/parse.js";
+import { businessFailed, MEAL_UNAVAILABLE_HINT, payloadRecord, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
 import { parseHm, zonedInstant, zonedParts } from "./time.js";
 import { userCommand } from "./user-command.js";
@@ -128,13 +128,23 @@ export function formatStoreChoices(stores: readonly StoreHit[]): string {
     .join("\n");
 }
 
+/** Live category names can embed newlines, e.g. "鸡肉汉堡\\n/卷". Keep the header on one line. */
+export function flattenMenuLabel(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("");
+}
+
 export function formatMenuChoices(items: readonly MenuItem[]): string {
   const lines: string[] = [];
   let lastCategory: string | null = null;
   items.forEach((item, index) => {
-    if (item.category && item.category !== lastCategory) {
-      lines.push(item.category);
-      lastCategory = item.category;
+    const category = item.category ? flattenMenuLabel(item.category) : "";
+    if (category && category !== lastCategory) {
+      lines.push(category);
+      lastCategory = category;
     }
     const price = item.price ? `  ¥${item.price.replace(/^¥/, "")}` : "";
     lines.push(`${index + 1}. ${item.name}  ${item.code}${price}`);
@@ -160,6 +170,19 @@ export function formatInitSummary(file: string, result: RunInitResult): string {
 }
 
 /**
+ * Saved lunch/dinner items are not on sale yet. Re-running init would query the
+ * same next meal and save the same items.
+ */
+export const BREAKFAST_HOUR_HINT =
+  "现在还是早餐时段，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。";
+
+/** Before the next configured meal, but not the same-day breakfast gap before lunch. */
+export const BEFORE_NEXT_MEAL_HINT =
+  "下一顿午饭或晚饭还没到，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。";
+
+type MealClock = Pick<MealsSettings, "timezone" | "lunch" | "dinner" | "prepMinutes" | "lingerMinutes">;
+
+/**
  * Next lunch or dinner, strictly after `now`, as `yyyy-MM-dd HH:mm`.
  * Init has no saved config yet, so the clocks default to 12:00 and 18:30.
  * A past reservationDate is rejected by the upstream menu API.
@@ -170,21 +193,61 @@ export function nextMealReservationDate(
   lunch = defaultMeals().lunch,
   dinner = defaultMeals().dinner,
 ): string {
+  const best = upcomingMeal(now, timeZone, lunch, dinner);
+  if (!best) throw new UserError("算不出下一个午饭或晚饭时间。没有写入配置，也没有下单。");
+  const zoned = zonedParts(best.at, timeZone);
+  return `${zoned.ymd} ${zoned.hm}`;
+}
+
+/**
+ * Wording for upstream 60006. Before the next lunch/dinner, the saved meal is
+ * not selling yet, so init should stay. Inside the meal window (prep lead
+ * through linger), a 60006 means those items are actually unavailable.
+ */
+export function unavailableMealHint(now: Date, meals: MealClock = defaultMeals()): string {
+  if (inOrNearMealWindow(now, meals)) return MEAL_UNAVAILABLE_HINT;
+  const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner);
+  if (next?.slot === "lunch" && zonedParts(now, meals.timezone).ymd === zonedParts(next.at, meals.timezone).ymd) {
+    return BREAKFAST_HOUR_HINT;
+  }
+  return BEFORE_NEXT_MEAL_HINT;
+}
+
+function upcomingMeal(
+  now: Date,
+  timeZone: string,
+  lunch: string,
+  dinner: string,
+): { slot: "lunch" | "dinner"; at: Date } | null {
   const parts = zonedParts(now, timeZone);
-  let best: Date | null = null;
+  let best: { slot: "lunch" | "dinner"; at: Date } | null = null;
   for (let add = 0; add < 3; add += 1) {
     const day = shiftDate(parts.year, parts.month, parts.day, add);
-    for (const hm of [lunch, dinner]) {
-      const clock = parseHm(hm);
+    for (const slot of ["lunch", "dinner"] as const) {
+      const clock = parseHm(slot === "lunch" ? lunch : dinner);
       if (!clock) continue;
-      const instant = zonedInstant(day.year, day.month, day.day, clock.hour, clock.minute, timeZone);
-      if (instant.getTime() <= now.getTime()) continue;
-      if (!best || instant.getTime() < best.getTime()) best = instant;
+      const at = zonedInstant(day.year, day.month, day.day, clock.hour, clock.minute, timeZone);
+      if (at.getTime() <= now.getTime()) continue;
+      if (!best || at.getTime() < best.at.getTime()) best = { slot, at };
     }
   }
-  if (!best) throw new UserError("算不出下一个午饭或晚饭时间。没有写入配置，也没有下单。");
-  const zoned = zonedParts(best, timeZone);
-  return `${zoned.ymd} ${zoned.hm}`;
+  return best;
+}
+
+function inOrNearMealWindow(now: Date, meals: MealClock): boolean {
+  const parts = zonedParts(now, meals.timezone);
+  for (let add = -1; add <= 1; add += 1) {
+    const day = shiftDate(parts.year, parts.month, parts.day, add);
+    for (const hm of [meals.lunch, meals.dinner]) {
+      const clock = parseHm(hm);
+      if (!clock) continue;
+      const target = zonedInstant(day.year, day.month, day.day, clock.hour, clock.minute, meals.timezone);
+      const start = target.getTime() - meals.prepMinutes * 60_000;
+      const end = target.getTime() + meals.lingerMinutes * 60_000;
+      if (now.getTime() >= start && now.getTime() < end) return true;
+    }
+  }
+  return false;
 }
 
 function shiftDate(year: number, month: number, day: number, days: number): { year: number; month: number; day: number } {
