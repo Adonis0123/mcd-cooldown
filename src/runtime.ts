@@ -5,6 +5,7 @@ import { loadConfig, resolveHome, type AppConfig } from "./config.js";
 import { HomeStore } from "./store.js";
 import { loadToken } from "./token.js";
 import { clockFromEnv } from "./time.js";
+import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 
 export interface AppContext {
@@ -36,7 +37,7 @@ export function loadContext(env: NodeJS.ProcessEnv = process.env): AppContext {
 export function makeCaller(ctx: AppContext, mock: boolean): ToolCaller {
   if (mock) return new FixtureBackend();
   if (!ctx.token) {
-    throw new UserError("还没有 Token。请在本机设置 MCD_MCP_TOKEN，不要把它写进仓库或对话。", 2);
+    throw new UserError(`还没有 Token。先运行 ${userCommand()} token，把 Token 留在本机。不要写进仓库或对话。`, 2);
   }
   return new McpHttpClient({ url: ctx.config.upstreamUrl, token: ctx.token });
 }

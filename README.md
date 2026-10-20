@@ -4,6 +4,8 @@
 
 Claude Code、Codex 或 Cursor 的额度见底，或者写到了午饭晚饭，状态栏会提你起来吃，并带上已经核好的价。本地 MCP 网关把 Token 留在本机，下单、抽奖和积分兑换默认只核价，你在终端确认后才放行。不弹窗，也没有常驻进程。换客户端也一样。
 
+适合在这些客户端里写代码、想自己确认后再下单的人。不替你支付，也不会自动下单。
+
 非麦当劳官方产品。价格和供应以麦当劳官方实时结果为准。输出不是营养或医疗建议。
 
 ![额度倒计时和只核价的终端预览](docs/terminal.png)
@@ -21,48 +23,29 @@ Claude Code、Codex 或 Cursor 的额度见底，或者写到了午饭晚饭，�
 
 ## 三步开始
 
-1. 安装。`npm install` 会编译出 `dist/src/cli.js`，`npm link` 让 `mcd-cooldown` 可以直接敲。不能 link 时，留在仓库目录，用 `node dist/src/cli.js` 跑同样的命令。
+1. 安装。`npm install` 会编译出 `dist/src/cli.js`，`npm link` 之后可以直接敲 `mcd-cooldown`。
 
 ```bash
 git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install && npm link
 ```
 
-不使用 `npm link`（权限不够，或不想改全局命令）时，安装停在 `npm install`，后面都写成：
+不使用 `npm link` 时，停在 `npm install`，后面把 `mcd-cooldown` 换成 `node dist/src/cli.js`。权限不够就用 `sudo npm link`；找不到命令时执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。
+
+2. 把 Token 留在本机文件里。不要写进仓库，也不要贴进对话。
 
 ```bash
-node dist/src/cli.js demo
-node dist/src/cli.js doctor --mock
-node dist/src/cli.js init
-node dist/src/cli.js setup claude
+mcd-cooldown token
 ```
 
-`npm link` 要是提示权限不足，把最后一段换成 `sudo npm link`。如果终端仍找不到命令，执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。没链上时，程序提示里会改用 `node` 加这份安装的绝对路径，复制就能跑。
+粘贴时不回显；从标准输入读也可以，删掉用 `mcd-cooldown token --clear`。只在当前终端临时生效的话，再 `export MCD_MCP_TOKEN=...`。
 
-2. Token 只留在本机终端。不要写进仓库，也不要贴进对话。
-
-```bash
-export MCD_MCP_TOKEN="从 open.mcd.cn 复制的 Token"
-```
-
-3. 选门店和常点的餐，并接到 Claude Code。
+3. 选门店和常点的餐，并接到 Claude Code。这一步只读，不下单。
 
 ```bash
 mcd-cooldown init && mcd-cooldown setup claude
 ```
 
-`init` 在交互终端里问城市和关键词，用只读的 `query-nearby-stores` 列出门店，你输入序号选定；再用只读的 `query-meals` 列出这家店的菜单，你选常点的几项。查菜单时会带上下一个午饭或晚饭（默认 12:00 和 18:30，当天这两顿都过了就用明天的午饭），所以早上初始化选到的是正餐，不是当时正在卖的早餐。配置写入 `~/.mcd-cooldown/config.json`。接着问要不要在状态栏提醒午饭和晚饭，默认工作日 12:00 和 18:30。这一步不下单。
-
-没有交互终端时，把选择写在参数里。`--store` 和 `--item` 先按编码匹配，对不上再按序号。`--item` 可以重复。门店和餐品都能对上时，只打印选定结果。还没给 `--item` 时，菜单默认只列前 20 项，并提示 `--menu-all` 可看全部、`--item <编码>` 可重复写入配置。对不上，或只给了城市和关键词时，仍会打出编号列表，不写配置。
-
-```bash
-mcd-cooldown init --city 上海 --keyword 南京西路 --store 门店编码 --item 餐品编码
-```
-
-没有 Token、只想看流程时，加上 `--mock`。那是样例门店，不会连接官方服务，也不会下单。
-
-`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`mcd-cooldown setup claude --print`（`--dry-run` 相同，不写文件）。
-
-离线预览不连接麦当劳：`mcd-cooldown demo`，以及 `mcd-cooldown doctor --mock`。样例门店和价格不是官方实时数据。有 Token 之后，`mcd-cooldown doctor` 只做只读自检：检查 Token 有没有漏进项目文件，然后列出工具，并查询当前时间、活动日历和营养数据长度。它不查订单、不领券、不抽奖、不下单。加 `--city 上海 --keyword 南京西路` 可以再列一次附近门店；查到 0 家会告警并建议换关键词。到店自取（`beType` 为 1）没有 `beCode`。`beCode` 只有得来速（`beType` 为 5）、外送（`beType` 为 2）和企业团餐（`beType` 为 6）才需要，这三种之外不要传。门店不在营业时间时，上游错误码 `600057` 会说成「门店当前不营业，可换 24 小时门店或改用预约（reservationDate）」。早上核价遇到错误码 `60006`、并且还没到下一顿午饭或晚饭（默认 12:00 / 18:30，已写入配置的钟点优先）时，会说明现在还是早餐时段、保存的正餐还没开卖、饭点提醒会在饭点前核价，不必重新跑 `init`，并补一句：门店和常点已经就绪，下一顿饭点提醒前会核价，可用 `doctor --city` 再核对门店。已经在饭点附近、餐品仍然不可售时，才说「常点里有这个时段不卖的餐品（比如早餐款），重新跑 init 换一份」。`doctor` 和 `plan` 在连接官方服务时，如果门店编码仍是 `init --mock` 留下的 `SAMPLE-` 样例门店，会直接说明要换真实 Token 再跑 `init`，不会把 Token 打出来。
+门店参数、`--mock`、doctor 和错误码见 [常见问题](docs/faq.md)。
 
 ## 它做什么
 
@@ -75,11 +58,11 @@ flowchart LR
   guard -->|"Authorization 只在这一跳"| mcd
 ```
 
-一层是 **mcd-guard**。它站在任意 MCP 客户端和麦当劳 MCP 之间。Token 放在环境变量或 `~/.mcd-cooldown/token`，不进模型上下文。`create-order`、`cancel-order`、`auto-bind-coupons`、`draw-lottery`、`mall-create-order`、`delivery-create-address`、`party-order-create` 会在协议层被拦住。模型就算重试，也只是再拿到一次「未提交」。
+一层是 **mcd-guard**。它站在任意 MCP 客户端和麦当劳 MCP 之间。Token 用 `mcd-cooldown token` 写到 `~/.mcd-cooldown/token`，不进模型上下文。环境变量 `MCD_MCP_TOKEN` 仍然优先，但只对当前终端有效。`create-order`、`cancel-order`、`auto-bind-coupons`、`draw-lottery`、`mall-create-order`、`delivery-create-address`、`party-order-create` 会在协议层被拦住。模型就算重试，也只是再拿到一次「未提交」。
 
 另一层是 **cooldown**。Claude Code 把额度窗口从状态栏标准输入送进来。接近用尽时，按 `resets_at` 倒推一个确认时间，并用你保存的常点餐品调用 `calculate-price`。到店自取是默认场景，起来走一趟也当作休息。确认之前没有任何订单。
 
-午饭和晚饭也走这一条状态栏。你配置的是想几点吃上，默认工作日 12:00 和 18:30。提醒时刻用出餐或配送时间往前倒：`calculate-price` 里若有预计分钟就用它，没有就用默认 20 分钟。状态栏写成「现在确认，约 12:05 可取」。外送则是「现在确认，约 12:05 送达」。每顿每天的 Stop hook 最多说一次。已吃或带了饭、稍后 15 分钟、今天跳过，各是一条命令。已经确认过的那顿，或者过了饭点 45 分钟，提醒自己消失。额度快用完又刚好是饭点时，合成一条，不说两遍。
+午饭和晚饭也走这一条状态栏。你配置的是想几点吃上，默认工作日 12:00 和 18:30。提醒时刻用出餐或配送时间往前倒：`calculate-price` 里若有预计分钟就用它，没有就用默认 20 分钟。只有已经核好价、并且有待确认请求时，状态栏才写成「现在确认，约 12:05 可取」。外送则是「现在确认，约 12:05 送达」。读不到 Token 时改为提示运行 `token`。核价没成功时提示运行 `plan` 看原因。每顿每天的 Stop hook 最多说一次。已吃或带了饭、稍后 15 分钟、今天跳过，各是一条命令。已经确认过的那顿，或者过了饭点 45 分钟，提醒自己消失。额度快用完又刚好是饭点时，合成一条，不说两遍。
 
 ```text
 mcd · 午饭时间 · 起来吃一点 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · 确认 7f3a2c1b
@@ -146,7 +129,7 @@ mcd-cooldown setup claude
 }
 ```
 
-`${MCD_MCP_TOKEN}` 由你的 shell 提供。不要把真实 Token 写进这个 JSON。
+`${MCD_MCP_TOKEN}` 由你的 shell 提供。从 IDE 启动时，那个 export 带不过来，网关改读 `~/.mcd-cooldown/token`。不要把真实 Token 写进这个 JSON。
 
 `init` 写好的是到店自取：`beType` 为 1，`takeWayCode` 为 `eat-in`，没有 `beCode`。字段形状见 `examples/config.example.json`。得来速、外送和团餐要自己补上 `beCode`。改饭点：
 
@@ -174,6 +157,7 @@ mcd-cooldown watch <订单号>
 
 | 命令 | 作用 |
 |---|---|
+| `token` | 把 Token 写到本机 `~/.mcd-cooldown/token`，权限 0600。不回显。`--clear` 删除 |
 | `init` | 按城市和关键词选择门店和常点餐品，写入配置。只读，不下单 |
 | `setup claude` | 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`。先备份，可重复执行。`--print` 只预览 |
 | `doctor` | 只读自检。没有 Token 时加 `--mock` |

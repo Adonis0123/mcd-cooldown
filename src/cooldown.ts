@@ -21,6 +21,8 @@ export interface StatusInput {
   pickup: PickupState | null;
   pickupStaleMs: number;
   meal?: MealStatus | null;
+  /** True when neither the environment nor the token file has a token. */
+  tokenMissing?: boolean;
 }
 
 export function formatStatusline(input: StatusInput): string {
@@ -36,6 +38,7 @@ export function formatStatusline(input: StatusInput): string {
       ? Math.round(input.session.durationMs / 60_000)
       : null;
   const meal = quiet ? null : input.meal ?? null;
+  const tokenMissing = input.tokenMissing === true;
   const segs: string[] = [];
   if (pickup) {
     segs.push(`取餐 ${pickup.code ?? pickup.orderId} · ${pickup.status}`);
@@ -47,11 +50,11 @@ export function formatStatusline(input: StatusInput): string {
     segs.push("适量即可");
     if (input.plan?.pendingId) segs.push("确认需 --allow-quiet");
   } else if (meal && high && primary) {
-    pushMeal(segs, meal, false);
+    pushMeal(segs, meal, false, tokenMissing);
     segs.push(formatWindow(primary));
     if (remaining) segs.push(`${remaining}后恢复`);
   } else if (meal) {
-    pushMeal(segs, meal, true);
+    pushMeal(segs, meal, true, tokenMissing);
   } else if (high && primary) {
     segs.push(formatWindow(primary));
     if (remaining) segs.push(`${remaining}后恢复`);
@@ -87,12 +90,33 @@ function overlayMeal(
   };
 }
 
-function pushMeal(segs: string[], meal: MealStatus, withRest: boolean): void {
+export function hasPricedPending(meal: MealStatus): boolean {
+  return meal.pendingId != null && meal.quoteCents != null;
+}
+
+/** One status-bar segment. Null means there is nothing to confirm yet. */
+export function mealActionText(meal: MealStatus, tokenMissing: boolean): string | null {
+  if (hasPricedPending(meal)) return `现在确认，约 ${meal.arriveHm} ${meal.verb}`;
+  if (tokenMissing) return `读不到 Token，运行 ${userCommand()} token`;
+  if (meal.quoteCents == null && meal.note) return `核价没成功，运行 ${userCommand()} plan 看原因`;
+  return null;
+}
+
+function pushMeal(segs: string[], meal: MealStatus, withRest: boolean, tokenMissing: boolean): void {
   segs.push(meal.phrase);
+  const action = mealActionText(meal, tokenMissing);
+  if (hasPricedPending(meal)) {
+    if (withRest) segs.push("起来吃一点");
+    if (action) segs.push(action);
+    segs.push(`已核价 ¥${formatYuanFromCents(meal.quoteCents ?? 0)}`);
+    segs.push(`确认 ${meal.pendingId}`);
+    return;
+  }
+  if (action) {
+    segs.push(action);
+    return;
+  }
   if (withRest) segs.push("起来吃一点");
-  segs.push(`现在确认，约 ${meal.arriveHm} ${meal.verb}`);
-  if (meal.quoteCents != null) segs.push(`已核价 ¥${formatYuanFromCents(meal.quoteCents)}`);
-  if (meal.pendingId) segs.push(`确认 ${meal.pendingId}`);
 }
 
 export async function preparePlan(input: {
@@ -183,6 +207,7 @@ export async function runHook(input: {
   now: Date;
   prepare: boolean;
   notify?: (title: string, body: string) => void;
+  tokenMissing?: boolean;
 }): Promise<string> {
   const session = mergeSession(extractSession(input.raw), input.store.readQuota());
   if (session.windows.length > 0 || session.durationMs != null) {
@@ -197,6 +222,13 @@ export async function runHook(input: {
   const quiet = isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone);
   const long = session.durationMs != null && session.durationMs >= input.config.longSessionMinutes * 60_000;
   let meal = quiet ? null : mealStatusFor(input.now, input.config, input.store);
+  if (input.tokenMissing && meal && !hasPricedPending(meal)) {
+    const signature = `missing-token|${meal.ymd}|${meal.slot}`;
+    const last = input.store.readHookNotice();
+    if (last?.signature === signature) return "";
+    input.store.writeHookNotice({ at: input.now.toISOString(), signature });
+    return `${meal.phrase}到了。读不到 Token。运行 ${userCommand()} token，把它留在本机。`;
+  }
   const nudged = meal != null && input.store.readMeal(meal.ymd, meal.slot)?.nudged === true;
   if (meal && nudged) return "";
   const mealDue = meal != null;
@@ -241,19 +273,31 @@ export async function runHook(input: {
     const signature = `${quiet}|${high}|${primary?.resetsAtMs ?? "none"}|${long}`;
     input.store.writeHookNotice({ at: input.now.toISOString(), signature });
   }
-  const text = hookText(input.config, input.now, session, plan, meal);
+  const text = hookText(input.config, input.now, session, plan, meal, input.tokenMissing === true);
   if (meal && input.config.meals.notify) input.notify?.("该起来吃饭了", text);
   return text;
 }
 
 function priceSentence(cents: number | null, note: string | null | undefined, empty: string): string {
   if (cents != null) return `已按你保存的份量核价 ¥${formatYuanFromCents(cents)}，尚未下单。`;
-  if (note?.includes(MEAL_UNAVAILABLE_HINT)) return `${MEAL_UNAVAILABLE_HINT}程序没有下单。`;
+  if (note?.includes(MEAL_UNAVAILABLE_HINT)) return `${MEAL_UNAVAILABLE_HINT}。程序没有下单。`;
   if (note?.includes("不必重新跑 init")) return `${note.trim()}程序没有下单。`;
   return empty;
 }
 
-function hookText(config: AppConfig, now: Date, session: SessionSignals, plan: PlanState | null, meal: MealStatus | null): string {
+function tokenSentence(tokenMissing: boolean, pendingId: string | null | undefined): string {
+  if (!tokenMissing || pendingId) return "";
+  return `读不到 Token。运行 ${userCommand()} token，把它留在本机。`;
+}
+
+function hookText(
+  config: AppConfig,
+  now: Date,
+  session: SessionSignals,
+  plan: PlanState | null,
+  meal: MealStatus | null,
+  tokenMissing: boolean,
+): string {
   const cmd = userCommand();
   const primary = primaryWindow(session.windows);
   const schedule = describeSchedule(now, primary?.resetsAtMs ?? null, config);
@@ -262,19 +306,23 @@ function hookText(config: AppConfig, now: Date, session: SessionSignals, plan: P
     const confirm = plan?.pendingId
       ? `已有待确认单 ${plan.pendingId}，提交时需要加上 --allow-quiet。`
       : `这个时段不生成待确认单。仍要准备请运行 ${cmd} plan --allow-quiet。`;
-    return `已经比较晚了，建议先休息。${price}${confirm}`;
+    return `已经比较晚了，建议先休息。${price}${tokenSentence(tokenMissing, plan?.pendingId)}${confirm}`;
   }
   if (meal) {
-    const mealPrice = priceSentence(meal.quoteCents, meal.note, "这次没有生成核价。先起来吃饭就好。");
+    const ready = hasPricedPending(meal);
+    const when = ready ? `现在确认的话，大约 ${meal.arriveHm} ${meal.verb}。` : "";
+    const failed = !ready && meal.quoteCents == null && Boolean(meal.note);
+    const fail = failed ? `核价没成功，运行 ${cmd} plan 看原因。` : "";
+    const mealPrice = priceSentence(meal.quoteCents, meal.note, ready ? "" : "这次没有生成核价。先起来吃饭就好。");
     const confirm = meal.pendingId ? `要下单请在本机执行 ${cmd} confirm ${meal.pendingId}。` : "";
     const quota = primary && primary.usedPercentage >= config.quotaThreshold ? `额度${schedule.headline}。` : "";
-    return `${meal.phrase}到了，起来吃一点。现在确认的话，大约 ${meal.arriveHm} ${meal.verb}。${quota}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：${cmd} ate、later、skip。`;
+    return `${meal.phrase}到了，起来吃一点。${when}${quota}${fail}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：${cmd} ate、later、skip。`;
   }
   if (primary && primary.usedPercentage >= config.quotaThreshold) {
     const confirm = plan?.pendingId ? `要下单请在本机执行 ${cmd} confirm ${plan.pendingId}。` : "";
-    return `额度${schedule.headline}。${schedule.hint}${price}${confirm}`.replace(/\s+/g, " ").trim();
+    return `额度${schedule.headline}。${schedule.hint}${price}${tokenSentence(tokenMissing, plan?.pendingId)}${confirm}`.replace(/\s+/g, " ").trim();
   }
-  return `这轮已经写了一段时间，起来活动一下。${price}程序不会自动下单。`;
+  return `这轮已经写了一段时间，起来活动一下。${price}${tokenSentence(tokenMissing, plan?.pendingId)}程序不会自动下单。`;
 }
 
 export function mergeSession(current: SessionSignals, saved: QuotaSnapshot | null): SessionSignals {

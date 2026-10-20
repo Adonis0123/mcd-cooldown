@@ -3,6 +3,7 @@ import type { AppConfig } from "./config.js";
 import { isRecord } from "./is.js";
 import { cnyToCents, moneyDecision } from "./money.js";
 import { annotateTool, GUARD_INSTRUCTIONS, holdMessage, quietLabel } from "./messages.js";
+import { mealActionText } from "./cooldown.js";
 import { mealStatusFor } from "./meals.js";
 import { orderArgsForUpstream, quoteCreateOrder } from "./order-flow.js";
 import { toolMessage } from "./mcp/parse.js";
@@ -162,7 +163,10 @@ export class Guard {
     }
     if (pickup && !pickup.terminal) lines.push(`取餐 ${pickup.code ?? pickup.orderId} · ${pickup.status}`);
     const meal = mealStatusFor(this.deps.now(), this.deps.config, this.deps.store);
-    if (meal) lines.push(`${meal.phrase} · 现在确认，约 ${meal.arriveHm} ${meal.verb}`);
+    if (meal) {
+      const action = mealActionText(meal, !this.deps.token);
+      lines.push(action ? `${meal.phrase} · ${action}` : meal.phrase);
+    }
     return lines.join("\n");
   }
 }
