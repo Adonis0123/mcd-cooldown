@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { flagBool, flagList, flagString, parseArgs, type FlagMap } from "./args.js";
 import { applyClaudeSetup } from "./claude-setup.js";
-import { assertHomeOutside } from "./config.js";
+import { assertHomeOutside, resolveHome } from "./config.js";
 import { assertConfigHidesToken, formatInitSummary, runInit } from "./init-config.js";
 import { confirmPending, denyPending } from "./confirm.js";
 import { formatStatusline, preparePlan, rememberSession, runHook } from "./cooldown.js";
@@ -20,7 +20,9 @@ import { formatAuditLine, formatPendingLine } from "./present.js";
 import { scrubForLog } from "./redact.js";
 import { loadContext, makeCaller } from "./runtime.js";
 import { serveStdio } from "./stdio-server.js";
+import { readHiddenLine } from "./secret-input.js";
 import { clockFromEnv } from "./time.js";
+import { clearTokenFile, saveTokenFile } from "./token.js";
 import { userCommand } from "./user-command.js";
 import { UserError } from "./user-error.js";
 import { VERSION } from "./version.js";
@@ -50,11 +52,14 @@ function helpText(): string {
   ${cmd} later
   ${cmd} skip
   ${cmd} init [--mock] [--meals] [--menu-all] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
+  ${cmd} token
+  ${cmd} token --clear
   ${cmd} setup claude [--print | --dry-run]
   ${cmd} demo
   ${cmd} mock [--port 39217]
 
-Token 只从环境变量 MCD_MCP_TOKEN 或本机 ~/.mcd-cooldown/token 读取。
+Token 用 ${cmd} token 写到本机 ~/.mcd-cooldown/token，权限 0600，不会回显。
+环境变量 MCD_MCP_TOKEN 优先，但只对当前终端有效。
 init 只读查询门店和菜单，不会下单。
 非麦当劳官方产品。默认只核价，不会自动下单。`;
 }
@@ -71,6 +76,10 @@ async function main(): Promise<void> {
   }
   if (parsed.command === "demo") {
     process.stdout.write(`${renderDemo()}\n`);
+    return;
+  }
+  if (parsed.command === "token") {
+    await runTokenCommand(parsed);
     return;
   }
   const env = process.env;
@@ -91,8 +100,12 @@ async function main(): Promise<void> {
       const mealsFlag = flagBool(parsed.flags, "meals");
       const guided = interactive || Boolean(city?.trim() || keyword?.trim() || storePick?.trim() || itemPicks.length > 0);
       if (!guided) {
+        const hint =
+          !flagBool(parsed.flags, "mock") && !ctx.token
+            ? `还没有 Token。先运行 ${userCommand()} token，把 Token 留在本机。\n`
+            : "";
         throw new UserError(
-          `交互终端里运行 ${userCommand()} init，按编号选择门店和常点餐品。\n非交互环境：${userCommand()} init --city 城市 --keyword 关键词 --store 门店 --item 餐品编码\n没有写入配置。`,
+          `${hint}交互终端里运行 ${userCommand()} init，按编号选择门店和常点餐品。\n非交互环境：${userCommand()} init --city 城市 --keyword 关键词 --store 门店 --item 餐品编码\n没有写入配置。`,
         );
       }
       const caller = makeCaller(ctx, flagBool(parsed.flags, "mock"));
@@ -196,6 +209,7 @@ async function main(): Promise<void> {
         pickup: ctx.store.readPickup(),
         pickupStaleMs: 120_000,
         meal: mealStatusFor(now(), ctx.config, ctx.store),
+        tokenMissing: !ctx.token,
       });
       process.stdout.write(`${line}\n`);
       return;
@@ -213,6 +227,7 @@ async function main(): Promise<void> {
         now: now(),
         prepare: caller != null,
         notify: ctx.config.meals.notify ? spawnDesktopNotify : undefined,
+        tokenMissing: !ctx.token && !mock,
       });
       if (text) process.stdout.write(`${text}\n`);
       return;
@@ -283,6 +298,22 @@ async function main(): Promise<void> {
     default:
       throw new UserError(`未知命令 ${parsed.command}\n\n${helpText()}`);
   }
+}
+
+async function runTokenCommand(parsed: ReturnType<typeof parseArgs>): Promise<void> {
+  if (parsed.positionals.length > 0) {
+    throw new UserError(`Token 不要写在命令后面。请运行 ${userCommand()} token，或从标准输入传入。`);
+  }
+  const home = resolveHome(process.env);
+  assertHomeOutside(home, process.cwd());
+  if (flagBool(parsed.flags, "clear")) {
+    const cleared = clearTokenFile(home);
+    process.stdout.write(cleared.removed ? `已删除 ${cleared.path}。\n` : `本机没有 token 文件：${cleared.path}\n`);
+    return;
+  }
+  const raw = process.stdin.isTTY ? await readHiddenLine("粘贴 Token 后回车：") : await readStdinText();
+  const saved = saveTokenFile(home, raw);
+  process.stdout.write(`已写入 ${saved.path}，长度 ${saved.length}，权限 0600。\n`);
 }
 
 function portOf(flags: FlagMap): number {

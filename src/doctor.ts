@@ -43,7 +43,7 @@ export async function runDoctor(input: DoctorInput): Promise<DoctorReport> {
   );
   for (const warning of input.warnings) lines.push(`注意：${warning}`);
   if (!input.mock && !input.token) {
-    lines.push("还没有 Token。在本机执行 export MCD_MCP_TOKEN=... 后重新运行 doctor。不要把 Token 写进仓库。");
+    lines.push(`还没有 Token。先运行 ${userCommand()} token，把 Token 留在本机后再运行 doctor。不要写进仓库。`);
     return { ok: false, lines, called };
   }
   if (!input.mock) {

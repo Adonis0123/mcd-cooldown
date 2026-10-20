@@ -545,15 +545,27 @@ test("prepare compiles the cli, and the quick start no longer asks for a hand ed
   assert.equal(readFileSync(cli, "utf8").split("\n")[0], "#!/usr/bin/env node");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   assert.match(readme, /## 三步开始/);
+  assert.match(readme, /适合在这些客户端里写代码/);
   const quick = readme.slice(readme.indexOf("## 三步开始"), readme.indexOf("## 它做什么"));
   assert.match(quick, /npm install && npm link/);
-  assert.match(quick, /node dist\/src\/cli\.js demo/);
-  assert.match(quick, /node dist\/src\/cli\.js doctor --mock/);
-  assert.match(quick, /node dist\/src\/cli\.js init/);
-  assert.match(quick, /node dist\/src\/cli\.js setup claude/);
+  assert.match(quick, /node dist\/src\/cli\.js/);
+  assert.match(quick, /mcd-cooldown token/);
+  assert.match(quick, /export MCD_MCP_TOKEN/);
   assert.match(quick, /mcd-cooldown init && mcd-cooldown setup claude/);
-  assert.match(quick, /--menu-all/);
+  assert.match(quick, /docs\/faq\.md/);
+  assert.equal(quick.includes("600057"), false);
+  assert.equal(quick.includes("--menu-all"), false);
   assert.deepEqual(quick.match(/^\d+\. /gm), ["1. ", "2. ", "3. "]);
+  const faq = readFileSync(join(root, "docs/faq.md"), "utf8");
+  assert.match(faq, /node dist\/src\/cli\.js demo/);
+  assert.match(faq, /node dist\/src\/cli\.js doctor --mock/);
+  assert.match(faq, /node dist\/src\/cli\.js init/);
+  assert.match(faq, /node dist\/src\/cli\.js setup claude/);
+  assert.match(faq, /--menu-all/);
+  assert.match(faq, /600057/);
+  assert.match(faq, /60006/);
+  assert.match(faq, /beType/);
+  assert.match(faq, /SAMPLE-/);
   assert.match(readme, /dist\/src\/cli\.js statusline/);
   assert.equal(readme.includes("把 YOUR_ 开头的占位换成"), false);
 });
@@ -576,6 +588,7 @@ test("cli init --mock writes the picked store and meals without ordering", async
   const missingToken = await run(["init", "--city", "示例市", "--keyword", "示例路", "--store", "1", "--item", "1"], env);
   assert.notEqual(missingToken.code, 0);
   assert.match(missingToken.stderr, /Token/);
+  assert.match(missingToken.stderr, /\btoken\b/);
   assert.equal(existsSync(configPath), false);
 
   const wrote = await run(

@@ -248,6 +248,10 @@ test("hook explains a usual item the current meal cannot sell", async () => {
   const text = await runHook({ raw: {}, caller: backend, store, config, now, prepare: true });
   assert.match(text, /这个时段不卖的餐品/);
   assert.match(text, /重新跑 init/);
+  assert.match(text, /换一份。程序没有下单/);
+  assert.equal(text.includes("换一份程序"), false);
+  assert.match(text, /核价没成功/);
+  assert.equal(text.includes("现在确认"), false);
   assert.equal(text.includes("商品已售罄"), false);
   assert.equal(text.includes("orderType"), false);
   assert.equal(backend.called("create-order"), 0);
@@ -294,4 +298,109 @@ test("meal commands change the clock and the weekend switch", () => {
   assert.equal(early, null);
   assert.equal(mealStatusFor(at(2026, 10, 12, 12, 15), saved, store)?.phrase, "午饭时间");
   assert.equal(mealStatusFor(at(2026, 10, 10, 12, 15), saved, store)?.phrase, "午饭时间");
+});
+
+test("statusline only says confirm when a priced request is waiting", () => {
+  const now = at(2026, 10, 12, 11, 50);
+  const meal = {
+    slot: "lunch" as const,
+    ymd: "2026-10-12",
+    phrase: "午饭时间",
+    arriveHm: "12:02",
+    verb: "可取" as const,
+    quoteCents: null as number | null,
+    pendingId: null as string | null,
+    prepMinutes: 20,
+    prepSource: "default" as const,
+    note: null as string | null,
+  };
+  const input = {
+    now,
+    config: mealsOn(),
+    session: { windows: [], durationMs: null },
+    plan: null,
+    pickup: null,
+    pickupStaleMs: 120_000,
+    meal,
+  };
+  const missing = formatStatusline({ ...input, tokenMissing: true });
+  assert.match(missing, /午饭时间/);
+  assert.match(missing, /读不到 Token/);
+  assert.match(missing, /\btoken\b/);
+  assert.equal(missing.includes("现在确认"), false);
+  const failed = formatStatusline({
+    ...input,
+    tokenMissing: false,
+    meal: { ...meal, note: "常点里有这个时段不卖的餐品（比如早餐款），重新跑 init 换一份" },
+  });
+  assert.match(failed, /核价没成功/);
+  assert.match(failed, /\bplan\b/);
+  assert.equal(failed.includes("现在确认"), false);
+  const waiting = formatStatusline({ ...input, tokenMissing: false });
+  assert.equal(waiting, "mcd · 午饭时间 · 起来吃一点");
+  assert.equal(waiting.includes("现在确认"), false);
+  const lost = formatStatusline({
+    ...input,
+    tokenMissing: true,
+    meal: { ...meal, quoteCents: 3650, pendingId: "7f3a2c1b" },
+  });
+  assert.match(lost, /读不到 Token/);
+  assert.equal(lost.includes("现在确认"), false);
+  assert.equal(lost.includes("7f3a2c1b"), false);
+  assert.equal(lost.includes("已核价"), false);
+});
+
+test("a missing token is explained once, and a later hook can still price", async () => {
+  const { store } = home();
+  const config = mealsOn();
+  const now = at(2026, 10, 12, 11, 50);
+  const first = await runHook({ raw: {}, caller: null, store, config, now, prepare: false, tokenMissing: true });
+  assert.match(first, /读不到 Token/);
+  assert.match(first, /\btoken\b/);
+  assert.equal(first.includes("现在确认"), false);
+  const second = await runHook({ raw: {}, caller: null, store, config, now, prepare: false, tokenMissing: true });
+  assert.equal(second, "");
+  const backend = new FixtureBackend();
+  const priced = await runHook({ raw: {}, caller: backend, store, config, now, prepare: true, tokenMissing: false });
+  assert.match(priced, /现在确认的话/);
+  assert.match(priced, /¥36\.50/);
+  assert.equal(backend.called("create-order"), 0);
+  const line = formatStatusline({
+    now,
+    config,
+    session: { windows: [], durationMs: null },
+    plan: store.readPlan(),
+    pickup: null,
+    pickupStaleMs: 120_000,
+    meal: mealStatusFor(now, config, store),
+    tokenMissing: false,
+  });
+  assert.match(line, /现在确认，约 12:05 可取/);
+  assert.match(line, /确认 /);
+});
+
+test("a priced meal stops offering confirm when the token is gone", async () => {
+  const { store } = home();
+  const config = mealsOn();
+  const now = at(2026, 10, 12, 11, 50);
+  const backend = new FixtureBackend();
+  const priced = await runHook({ raw: {}, caller: backend, store, config, now, prepare: true, tokenMissing: false });
+  assert.match(priced, /现在确认的话/);
+  const lost = await runHook({ raw: {}, caller: null, store, config, now, prepare: false, tokenMissing: true });
+  assert.match(lost, /读不到 Token/);
+  assert.equal(lost.includes("现在确认"), false);
+  assert.equal(lost.includes("confirm"), false);
+  const line = formatStatusline({
+    now,
+    config,
+    session: { windows: [], durationMs: null },
+    plan: store.readPlan(),
+    pickup: null,
+    pickupStaleMs: 120_000,
+    meal: mealStatusFor(now, config, store),
+    tokenMissing: true,
+  });
+  assert.match(line, /读不到 Token/);
+  assert.equal(line.includes("现在确认"), false);
+  assert.equal(line.includes("确认 "), false);
 });

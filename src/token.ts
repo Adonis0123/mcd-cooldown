@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "./user-error.js";
 
@@ -35,7 +35,32 @@ export function loadToken(home: string, env: NodeJS.ProcessEnv): TokenLoad {
   return { token, source: "本机 token 文件", warnings };
 }
 
-function assertTokenShape(token: string): void {
+export function assertTokenShape(token: string): void {
   if (token.length < 8) throw new UserError("Token 太短，已拒绝使用");
   if (/\s/.test(token)) throw new UserError("Token 不能包含空白。请只放入 Token 本身");
+}
+
+export function tokenFilePath(home: string): string {
+  return join(home, "token");
+}
+
+/** Write a normalized token to the home file. Returns length only, never the token. */
+export function saveTokenFile(home: string, raw: string): { path: string; length: number } {
+  const token = normalizeToken(raw);
+  if (!token) throw new UserError("没有读到 Token，没有写入。");
+  assertTokenShape(token);
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  const file = tokenFilePath(home);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, `${token}\n`, { mode: 0o600 });
+  renameSync(tmp, file);
+  chmodSync(file, 0o600);
+  return { path: file, length: token.length };
+}
+
+export function clearTokenFile(home: string): { path: string; removed: boolean } {
+  const file = tokenFilePath(home);
+  if (!existsSync(file)) return { path: file, removed: false };
+  unlinkSync(file);
+  return { path: file, removed: true };
 }
