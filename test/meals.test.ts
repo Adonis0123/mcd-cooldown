@@ -339,6 +339,15 @@ test("statusline only says confirm when a priced request is waiting", () => {
   const waiting = formatStatusline({ ...input, tokenMissing: false });
   assert.equal(waiting, "mcd · 午饭时间 · 起来吃一点");
   assert.equal(waiting.includes("现在确认"), false);
+  const lost = formatStatusline({
+    ...input,
+    tokenMissing: true,
+    meal: { ...meal, quoteCents: 3650, pendingId: "7f3a2c1b" },
+  });
+  assert.match(lost, /读不到 Token/);
+  assert.equal(lost.includes("现在确认"), false);
+  assert.equal(lost.includes("7f3a2c1b"), false);
+  assert.equal(lost.includes("已核价"), false);
 });
 
 test("a missing token is explained once, and a later hook can still price", async () => {
@@ -368,4 +377,30 @@ test("a missing token is explained once, and a later hook can still price", asyn
   });
   assert.match(line, /现在确认，约 12:05 可取/);
   assert.match(line, /确认 /);
+});
+
+test("a priced meal stops offering confirm when the token is gone", async () => {
+  const { store } = home();
+  const config = mealsOn();
+  const now = at(2026, 10, 12, 11, 50);
+  const backend = new FixtureBackend();
+  const priced = await runHook({ raw: {}, caller: backend, store, config, now, prepare: true, tokenMissing: false });
+  assert.match(priced, /现在确认的话/);
+  const lost = await runHook({ raw: {}, caller: null, store, config, now, prepare: false, tokenMissing: true });
+  assert.match(lost, /读不到 Token/);
+  assert.equal(lost.includes("现在确认"), false);
+  assert.equal(lost.includes("confirm"), false);
+  const line = formatStatusline({
+    now,
+    config,
+    session: { windows: [], durationMs: null },
+    plan: store.readPlan(),
+    pickup: null,
+    pickupStaleMs: 120_000,
+    meal: mealStatusFor(now, config, store),
+    tokenMissing: true,
+  });
+  assert.match(line, /读不到 Token/);
+  assert.equal(line.includes("现在确认"), false);
+  assert.equal(line.includes("确认 "), false);
 });

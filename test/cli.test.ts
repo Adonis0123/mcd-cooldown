@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -11,7 +11,6 @@ import { listenLoopback } from "../src/mcp/http.js";
 import { normalizeHiddenInput } from "../src/secret-input.js";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
-const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const sampleToken = "fixture-token-0123456789";
 
 function run(args: string[], env: NodeJS.ProcessEnv, input?: string, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -315,14 +314,42 @@ test("token command saves from stdin without echoing, and refuses the project di
   assert.equal(fromArg.stderr.includes(argvSecret), false);
   assert.equal(existsSync(file), false);
 
-  const inside = join(repoRoot, "should-not-write-token");
-  const blocked = await run(["token"], { ...env, MCD_HOME: inside }, `${sampleToken}\n`, repoRoot);
+  const project = mkdtempSync(join(tmpdir(), "mcd-proj-"));
+  mkdirSync(join(project, ".git"));
+  const inside = join(project, "should-not-write-token");
+  const blocked = await run(["token"], { ...env, MCD_HOME: inside }, `${sampleToken}\n`, project);
   assert.notEqual(blocked.code, 0);
   assert.match(blocked.stderr, /项目目录/);
   assert.equal(blocked.stdout.includes(sampleToken), false);
   assert.equal(blocked.stderr.includes(sampleToken), false);
   assert.equal(existsSync(join(inside, "token")), false);
   assert.equal(existsSync(inside), false);
+});
+
+test("token commands replace or clear a damaged token file", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-token-bad-"));
+  const file = join(home, "token");
+  const damaged = "tiny";
+  writeFileSync(file, `${damaged}\n`, { mode: 0o600 });
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: damaged };
+  const cleared = await run(["token", "--clear"], env);
+  assert.equal(cleared.code, 0, cleared.stderr);
+  assert.match(cleared.stdout, /已删除/);
+  assert.equal(cleared.stdout.includes(damaged), false);
+  assert.equal(cleared.stderr.includes(damaged), false);
+  assert.equal(cleared.stderr.includes("太短"), false);
+  assert.equal(existsSync(file), false);
+
+  writeFileSync(file, `${damaged}\n`, { mode: 0o600 });
+  const replaced = await run(["token"], env, `${sampleToken}\n`);
+  assert.equal(replaced.code, 0, replaced.stderr);
+  assert.match(replaced.stdout, /长度 24/);
+  assert.equal(readFileSync(file, "utf8"), `${sampleToken}\n`);
+  assert.equal(replaced.stdout.includes(sampleToken), false);
+  assert.equal(replaced.stdout.includes(damaged), false);
+  assert.equal(replaced.stderr.includes(sampleToken), false);
+  assert.equal(replaced.stderr.includes(damaged), false);
+  assert.equal(replaced.stderr.includes("太短"), false);
 });
 
 test("statusline and hook explain a missing token instead of a fake confirm", async () => {
@@ -382,4 +409,39 @@ test("a failed quote does not offer confirm, and 60006 keeps a sentence break", 
   assert.match(line.stdout, /\bplan\b/);
   assert.equal(line.stdout.includes("现在确认"), false);
   assert.equal(line.stdout.includes(sampleToken), false);
+});
+
+test("a priced request does not offer confirm after the token disappears", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-lost-token-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      meals: { enabled: true, timezone: "Asia/Shanghai", weekends: false, lunch: "12:00", dinner: "18:30", prepMinutes: 20, lingerMinutes: 45, notify: false },
+      store: { storeCode: "1400123", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "常点一份", items: [{ productCode: "SAMPLE-001", quantity: 1 }] },
+    }),
+  );
+  const env = {
+    ...process.env,
+    MCD_HOME: home,
+    MCD_MCP_TOKEN: sampleToken,
+    MCD_NOW: "2026-10-20T03:50:00Z",
+  };
+  const priced = await run(["hook", "--mock"], env, "{}\n");
+  assert.equal(priced.code, 0, priced.stderr);
+  assert.match(priced.stdout, /现在确认/);
+  assert.equal(priced.stdout.includes(sampleToken), false);
+  const gone = { ...env, MCD_MCP_TOKEN: "" };
+  const line = await run(["statusline"], gone, "{}\n");
+  assert.equal(line.code, 0, line.stderr);
+  assert.match(line.stdout, /读不到 Token/);
+  assert.match(line.stdout, /\btoken\b/);
+  assert.equal(line.stdout.includes("现在确认"), false);
+  assert.equal(line.stdout.includes(sampleToken), false);
+  const hook = await run(["hook"], gone, "{}\n");
+  assert.equal(hook.code, 0, hook.stderr);
+  assert.match(hook.stdout, /读不到 Token/);
+  assert.equal(hook.stdout.includes("现在确认"), false);
+  assert.equal(hook.stdout.includes("confirm"), false);
+  assert.equal(hook.stdout.includes(sampleToken), false);
 });

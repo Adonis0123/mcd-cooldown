@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { flagBool, flagList, flagString, parseArgs, type FlagMap } from "./args.js";
 import { applyClaudeSetup } from "./claude-setup.js";
-import { assertHomeOutside } from "./config.js";
+import { assertHomeOutside, resolveHome } from "./config.js";
 import { assertConfigHidesToken, formatInitSummary, runInit } from "./init-config.js";
 import { confirmPending, denyPending } from "./confirm.js";
 import { formatStatusline, preparePlan, rememberSession, runHook } from "./cooldown.js";
@@ -78,6 +78,10 @@ async function main(): Promise<void> {
     process.stdout.write(`${renderDemo()}\n`);
     return;
   }
+  if (parsed.command === "token") {
+    await runTokenCommand(parsed);
+    return;
+  }
   const env = process.env;
   const ctx = loadContext(env);
   if (parsed.command !== "mock") assertHomeOutside(ctx.home, process.cwd());
@@ -130,20 +134,6 @@ async function main(): Promise<void> {
       } finally {
         prompter?.close();
       }
-      return;
-    }
-    case "token": {
-      if (parsed.positionals.length > 0) {
-        throw new UserError(`Token 不要写在命令后面。请运行 ${userCommand()} token，或从标准输入传入。`);
-      }
-      if (flagBool(parsed.flags, "clear")) {
-        const cleared = clearTokenFile(ctx.home);
-        process.stdout.write(cleared.removed ? `已删除 ${cleared.path}。\n` : `本机没有 token 文件：${cleared.path}\n`);
-        return;
-      }
-      const raw = process.stdin.isTTY ? await readHiddenLine("粘贴 Token 后回车：") : await readStdinText();
-      const saved = saveTokenFile(ctx.home, raw);
-      process.stdout.write(`已写入 ${saved.path}，长度 ${saved.length}，权限 0600。\n`);
       return;
     }
     case "setup": {
@@ -308,6 +298,22 @@ async function main(): Promise<void> {
     default:
       throw new UserError(`未知命令 ${parsed.command}\n\n${helpText()}`);
   }
+}
+
+async function runTokenCommand(parsed: ReturnType<typeof parseArgs>): Promise<void> {
+  if (parsed.positionals.length > 0) {
+    throw new UserError(`Token 不要写在命令后面。请运行 ${userCommand()} token，或从标准输入传入。`);
+  }
+  const home = resolveHome(process.env);
+  assertHomeOutside(home, process.cwd());
+  if (flagBool(parsed.flags, "clear")) {
+    const cleared = clearTokenFile(home);
+    process.stdout.write(cleared.removed ? `已删除 ${cleared.path}。\n` : `本机没有 token 文件：${cleared.path}\n`);
+    return;
+  }
+  const raw = process.stdin.isTTY ? await readHiddenLine("粘贴 Token 后回车：") : await readStdinText();
+  const saved = saveTokenFile(home, raw);
+  process.stdout.write(`已写入 ${saved.path}，长度 ${saved.length}，权限 0600。\n`);
 }
 
 function portOf(flags: FlagMap): number {

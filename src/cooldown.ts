@@ -96,22 +96,26 @@ export function hasPricedPending(meal: MealStatus): boolean {
 
 /** One status-bar segment. Null means there is nothing to confirm yet. */
 export function mealActionText(meal: MealStatus, tokenMissing: boolean): string | null {
-  if (hasPricedPending(meal)) return `现在确认，约 ${meal.arriveHm} ${meal.verb}`;
   if (tokenMissing) return `读不到 Token，运行 ${userCommand()} token`;
+  if (hasPricedPending(meal)) return `现在确认，约 ${meal.arriveHm} ${meal.verb}`;
   if (meal.quoteCents == null && meal.note) return `核价没成功，运行 ${userCommand()} plan 看原因`;
   return null;
 }
 
 function pushMeal(segs: string[], meal: MealStatus, withRest: boolean, tokenMissing: boolean): void {
   segs.push(meal.phrase);
-  const action = mealActionText(meal, tokenMissing);
+  if (tokenMissing) {
+    segs.push(`读不到 Token，运行 ${userCommand()} token`);
+    return;
+  }
   if (hasPricedPending(meal)) {
     if (withRest) segs.push("起来吃一点");
-    if (action) segs.push(action);
+    segs.push(`现在确认，约 ${meal.arriveHm} ${meal.verb}`);
     segs.push(`已核价 ¥${formatYuanFromCents(meal.quoteCents ?? 0)}`);
     segs.push(`确认 ${meal.pendingId}`);
     return;
   }
+  const action = mealActionText(meal, false);
   if (action) {
     segs.push(action);
     return;
@@ -222,7 +226,7 @@ export async function runHook(input: {
   const quiet = isQuietHour(input.now, input.config.quietStartHour, input.config.quietEndHour, input.config.meals.timezone);
   const long = session.durationMs != null && session.durationMs >= input.config.longSessionMinutes * 60_000;
   let meal = quiet ? null : mealStatusFor(input.now, input.config, input.store);
-  if (input.tokenMissing && meal && !hasPricedPending(meal)) {
+  if (input.tokenMissing && meal) {
     const signature = `missing-token|${meal.ymd}|${meal.slot}`;
     const last = input.store.readHookNotice();
     if (last?.signature === signature) return "";
@@ -285,8 +289,8 @@ function priceSentence(cents: number | null, note: string | null | undefined, em
   return empty;
 }
 
-function tokenSentence(tokenMissing: boolean, pendingId: string | null | undefined): string {
-  if (!tokenMissing || pendingId) return "";
+function tokenSentence(tokenMissing: boolean): string {
+  if (!tokenMissing) return "";
   return `读不到 Token。运行 ${userCommand()} token，把它留在本机。`;
 }
 
@@ -302,13 +306,16 @@ function hookText(
   const primary = primaryWindow(session.windows);
   const schedule = describeSchedule(now, primary?.resetsAtMs ?? null, config);
   const price = priceSentence(plan?.quoteCents ?? null, plan?.note, "这次没有生成核价。");
+  const missing = tokenSentence(tokenMissing);
   if (schedule.quiet) {
+    if (tokenMissing) return `已经比较晚了，建议先休息。${price}${missing}`;
     const confirm = plan?.pendingId
       ? `已有待确认单 ${plan.pendingId}，提交时需要加上 --allow-quiet。`
       : `这个时段不生成待确认单。仍要准备请运行 ${cmd} plan --allow-quiet。`;
-    return `已经比较晚了，建议先休息。${price}${tokenSentence(tokenMissing, plan?.pendingId)}${confirm}`;
+    return `已经比较晚了，建议先休息。${price}${confirm}`;
   }
   if (meal) {
+    if (tokenMissing) return `${meal.phrase}到了。${missing}`;
     const ready = hasPricedPending(meal);
     const when = ready ? `现在确认的话，大约 ${meal.arriveHm} ${meal.verb}。` : "";
     const failed = !ready && meal.quoteCents == null && Boolean(meal.note);
@@ -319,10 +326,12 @@ function hookText(
     return `${meal.phrase}到了，起来吃一点。${when}${quota}${fail}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：${cmd} ate、later、skip。`;
   }
   if (primary && primary.usedPercentage >= config.quotaThreshold) {
+    if (tokenMissing) return `额度${schedule.headline}。${schedule.hint}${price}${missing}`.replace(/\s+/g, " ").trim();
     const confirm = plan?.pendingId ? `要下单请在本机执行 ${cmd} confirm ${plan.pendingId}。` : "";
-    return `额度${schedule.headline}。${schedule.hint}${price}${tokenSentence(tokenMissing, plan?.pendingId)}${confirm}`.replace(/\s+/g, " ").trim();
+    return `额度${schedule.headline}。${schedule.hint}${price}${confirm}`.replace(/\s+/g, " ").trim();
   }
-  return `这轮已经写了一段时间，起来活动一下。${price}${tokenSentence(tokenMissing, plan?.pendingId)}程序不会自动下单。`;
+  if (tokenMissing) return `这轮已经写了一段时间，起来活动一下。${price}${missing}`;
+  return `这轮已经写了一段时间，起来活动一下。${price}程序不会自动下单。`;
 }
 
 export function mergeSession(current: SessionSignals, saved: QuotaSnapshot | null): SessionSignals {
