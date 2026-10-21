@@ -1,10 +1,10 @@
 import type { AppConfig } from "./config.js";
-import { placeholderConfig } from "./config.js";
+import { placeholderConfig, readyConfig } from "./config.js";
 import { mealStatusFor, prepareMeal, type MealStatus } from "./meals.js";
 import { cnyToCents, formatYuanFromCents, moneyDecision, validateCreateOrder } from "./money.js";
 import { MEAL_UNAVAILABLE_HINT, payloadRecord, unwrapPayload } from "./mcp/parse.js";
 import type { ToolCaller } from "./mcp/types.js";
-import { unavailableMealHint } from "./init-config.js";
+import { nextMealLabel, unavailableMealHint } from "./init-config.js";
 import { orderArgsFromConfig, quoteCreateOrder } from "./order-flow.js";
 import { asText } from "./is.js";
 import { describeSchedule } from "./schedule.js";
@@ -66,9 +66,19 @@ export function formatStatusline(input: StatusInput): string {
   } else if (primary) {
     segs.push(formatWindow(primary));
   } else {
-    segs.push("待命");
+    segs.push(idleText(input.now, input.config));
   }
   return ["mcd", ...segs].join(" · ").replace(/\s*\n\s*/g, " ");
+}
+
+function idleText(now: Date, config: AppConfig): string {
+  if (!readyConfig(config)) return `还没选门店和常点，运行 ${userCommand()} init`;
+  const when = nextMealLabel(now, config.meals);
+  const name = (config.usual?.label ?? "").replace(/\s+/g, " ").trim() || "常点一份";
+  const parts = ["已就绪"];
+  if (when) parts.push(when);
+  parts.push(`常点 ${name}`);
+  return parts.join(" · ");
 }
 
 function overlayMeal(

@@ -2,9 +2,21 @@
 
 这里是首次上手不必先看的细节。三步命令在 [README](../README.md#三步开始)。
 
-## 不使用 npm link
+## 想改代码
 
-安装停在 `npm install` 时，用 `node dist/src/cli.js` 跑同样的命令：
+上手用 `npm install -g github:Adonis0123/mcd-cooldown` 即可，不必克隆。要改源码时再克隆。仓库里的 `dist/src` 是编译结果，`npm test` 和 CI 会核对它和源码是否一致。
+
+```bash
+git clone https://github.com/Adonis0123/mcd-cooldown.git
+cd mcd-cooldown
+npm install
+npm run compile
+npm link
+```
+
+`package.json` 里不要加名叫 `build`、`prepare`、`prepack` 或 `install` 的脚本。`npm install -g github:...` 看到这些名字，会在临时目录里再跑一次安装；`tsc` 不在 PATH 上时，安装会以退出码 127 失败。编译用 `npm run compile`。
+
+不使用 `npm link` 时，用 `node dist/src/cli.js` 跑同样的命令：
 
 ```bash
 node dist/src/cli.js demo
@@ -13,7 +25,9 @@ node dist/src/cli.js init
 node dist/src/cli.js setup claude
 ```
 
-`npm link` 提示权限不足时，用 `sudo npm link`。终端仍找不到命令时，执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。没链上时，程序提示里会改用 `node` 加这份安装的绝对路径，复制就能跑。
+`npm link` 或全局安装提示权限不足时，可以用 `sudo npm link`，或 `sudo npm install -g github:Adonis0123/mcd-cooldown`。终端仍找不到命令时，执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。没链上时，程序提示里会改用 `node` 加这份安装的绝对路径，复制就能跑。
+
+`setup claude` 写入的状态栏和 Stop hook 是这份安装的绝对路径。全局安装后指向 prefix 里的 `lib/node_modules/mcd-cooldown/dist/src/cli.js`，不看当前目录。
 
 ## 没有交互终端时怎么 init
 
@@ -27,7 +41,7 @@ mcd-cooldown init --city 上海 --keyword 南京西路 --store 门店编码 --it
 
 没有 Token、只想看流程时，加上 `--mock`。那是样例门店，不会连接官方服务，也不会下单。
 
-`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`mcd-cooldown setup claude --print`（`--dry-run` 相同，不写文件）。
+`setup claude` 把状态栏和 Stop hook 合并进 `~/.claude/settings.json`，命令里是这份安装的绝对路径。写入前先备份。已经合并过再跑一次不会重复添加。想先看 JSON：`mcd-cooldown setup claude --print`（`--dry-run` 相同，不写文件）。写完后重开 Claude Code，状态栏才会显示那一行短状态。
 
 ## Token 文件
 

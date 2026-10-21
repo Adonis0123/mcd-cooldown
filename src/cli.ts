@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { flagBool, flagList, flagString, parseArgs, type FlagMap } from "./args.js";
-import { applyClaudeSetup } from "./claude-setup.js";
+import { applyClaudeSetup, claudeSetupPresent } from "./claude-setup.js";
 import { assertHomeOutside, resolveHome } from "./config.js";
 import { assertConfigHidesToken, formatInitSummary, runInit } from "./init-config.js";
 import { confirmPending, denyPending } from "./confirm.js";
@@ -131,6 +131,10 @@ async function main(): Promise<void> {
         writeFileSync(tmp, result.configText, { mode: 0o600 });
         renameSync(tmp, file);
         process.stdout.write(`${scrub(formatInitSummary(file, result))}\n`);
+        const claudeSettings = join(homedir(), ".claude", "settings.json");
+        if (!claudeSetupPresent(claudeSettings)) {
+          process.stdout.write(`下一步：${userCommand()} setup claude\n`);
+        }
       } finally {
         prompter?.close();
       }

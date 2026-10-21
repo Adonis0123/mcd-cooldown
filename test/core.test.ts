@@ -3,7 +3,7 @@ import test from "node:test";
 import { moneyDecision, extractCents, formatYuanFromCents } from "../src/money.js";
 import { scrubForLog, scrubSecrets } from "../src/redact.js";
 import { describeSchedule } from "../src/schedule.js";
-import { defaultConfig } from "../src/config.js";
+import { defaultConfig, readyConfig } from "../src/config.js";
 import { DEMO_NOW, DEMO_RESET, renderDemo } from "../src/demo.js";
 import { isQuietHour, shanghaiParts } from "../src/time.js";
 import { assertTokenUrl } from "../src/url-policy.js";
@@ -11,6 +11,8 @@ import { stringWidth } from "../src/width.js";
 import { createFrameParser } from "../src/frame.js";
 import { extractSession } from "../src/session.js";
 import { formatStatusline } from "../src/cooldown.js";
+import { userCommand } from "../src/user-command.js";
+import { zonedInstant } from "../src/time.js";
 import { HomeStore } from "../src/store.js";
 
 test("money uses integer cents and blocks the over-limit order", () => {
@@ -91,6 +93,61 @@ test("demo box is aligned and statusline stays one calm line", () => {
     pickupStaleMs: 120_000,
   });
   assert.equal(calm, "mcd · 5h 23%");
+});
+
+test("idle statusline says the next meal when configured, otherwise init", () => {
+  const morning = zonedInstant(2026, 10, 21, 9, 30, "Asia/Shanghai");
+  const bare = formatStatusline({
+    now: morning,
+    config: defaultConfig(),
+    session: { windows: [], durationMs: null },
+    plan: null,
+    pickup: null,
+    pickupStaleMs: 120_000,
+  });
+  assert.equal(bare, `mcd · 还没选门店和常点，运行 ${userCommand()} init`);
+  assert.equal(bare.includes("待命"), false);
+  assert.equal(readyConfig(defaultConfig()), false);
+
+  const placeholder = defaultConfig();
+  placeholder.store = { storeCode: "YOUR_STORE_CODE", beType: 1, orderType: 1, takeWayCode: "eat-in" };
+  placeholder.usual = { label: "常点一份", items: [{ productCode: "YOUR_PRODUCT_CODE", quantity: 1 }] };
+  const unfinished = formatStatusline({
+    now: morning,
+    config: placeholder,
+    session: { windows: [], durationMs: null },
+    plan: null,
+    pickup: null,
+    pickupStaleMs: 120_000,
+  });
+  assert.equal(unfinished, bare);
+
+  const ready = defaultConfig();
+  ready.store = { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" };
+  ready.usual = { label: "鸡薯双全盒", items: [{ productCode: "SAMPLE-001", quantity: 1 }] };
+  const input = {
+    config: ready,
+    session: { windows: [], durationMs: null },
+    plan: null,
+    pickup: null,
+    pickupStaleMs: 120_000,
+  };
+  assert.equal(
+    formatStatusline({ ...input, now: morning }),
+    "mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒",
+  );
+  assert.equal(
+    formatStatusline({ ...input, now: zonedInstant(2026, 10, 21, 13, 0, "Asia/Shanghai") }),
+    "mcd · 已就绪 · 晚饭 18:30 · 常点 鸡薯双全盒",
+  );
+  assert.equal(
+    formatStatusline({ ...input, now: zonedInstant(2026, 10, 21, 19, 10, "Asia/Shanghai") }),
+    "mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒",
+  );
+  const quiet = formatStatusline({ ...input, now: zonedInstant(2026, 10, 21, 23, 30, "Asia/Shanghai") });
+  assert.match(quiet, /先休息/);
+  assert.equal(quiet.includes("已就绪"), false);
+  assert.equal(quiet.includes("鸡薯双全盒"), false);
 });
 
 test("stdio parser accepts newline json and content-length frames", async () => {

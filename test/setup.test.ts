@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { flagBool, flagList, flagString, parseArgs } from "../src/args.js";
-import { applyClaudeSetup, hookCommand, mergeClaudeSettings, statuslineCommand } from "../src/claude-setup.js";
+import { applyClaudeSetup, claudeSetupPresent, hookCommand, mergeClaudeSettings, statuslineCommand } from "../src/claude-setup.js";
 import { CATALOG } from "../src/catalog.js";
 import { loadConfig, placeholderConfig } from "../src/config.js";
 import {
@@ -489,12 +489,15 @@ test("claude setup merges, backs up, and stays idempotent", () => {
   assert.equal(merged.hooks.Stop.length, 2);
   assert.match(JSON.stringify(merged), /echo stay/);
   assert.match(first.message, /原来的 statusLine/);
+  assert.match(first.message, /重开 Claude Code/);
+  assert.match(first.message, /mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒/);
 
   const second = applyClaudeSetup({ settingsPath, cliPath });
   assert.equal(second.changed, false);
   assert.equal(second.wrote, false);
   assert.equal(second.backupPath, null);
   assert.match(second.message, /没有重复添加/);
+  assert.match(second.message, /重开 Claude Code/);
   assert.equal(readFileSync(`${settingsPath}.bak`, "utf8"), original);
   assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).hooks.Stop.length, 2);
 
@@ -518,6 +521,9 @@ test("claude setup creates a new file, quotes spaced paths, and refuses invalid 
   assert.equal(created.wrote, true);
   assert.equal(created.backupPath, null);
   assert.match(created.message, /已写入/);
+  assert.match(created.message, /重开 Claude Code/);
+  assert.match(created.message, /会提示运行 init/);
+  assert.equal(created.message.includes("未写入"), false);
   const body = JSON.parse(readFileSync(settingsPath, "utf8")) as { statusLine: { command: string }; hooks: { Stop: unknown[] } };
   assert.equal(body.statusLine.command, "node '/tmp/my project/dist/src/cli.js' statusline");
   assert.equal(hookCommand("/tmp/my project/dist/src/cli.js"), "node '/tmp/my project/dist/src/cli.js' hook");
@@ -537,26 +543,36 @@ test("claude setup creates a new file, quotes spaced paths, and refuses invalid 
   assert.equal(existsSync(`${odd}.bak`), false);
 });
 
-test("prepare compiles the cli, and the quick start no longer asks for a hand edit", () => {
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: { prepare: string; build: string } };
-  assert.match(pkg.scripts.prepare, /tsc/);
-  assert.match(pkg.scripts.build, /tsc/);
+test("git install does not run tsc, and the quick start is one command", () => {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: Record<string, string> };
+  for (const name of ["prepare", "prepack", "build", "install", "preinstall", "postinstall"]) {
+    assert.equal(pkg.scripts[name], undefined, name);
+  }
+  assert.match(pkg.scripts.compile, /tsc/);
+  assert.match(pkg.scripts.test, /check-dist\.mjs/);
   assert.equal(existsSync(cli), true);
   assert.equal(readFileSync(cli, "utf8").split("\n")[0], "#!/usr/bin/env node");
   const readme = readFileSync(join(root, "README.md"), "utf8");
   assert.match(readme, /## 三步开始/);
   assert.match(readme, /适合在这些客户端里写代码/);
   const quick = readme.slice(readme.indexOf("## 三步开始"), readme.indexOf("## 它做什么"));
-  assert.match(quick, /npm install && npm link/);
-  assert.match(quick, /node dist\/src\/cli\.js/);
+  assert.match(quick, /npm install -g github:Adonis0123\/mcd-cooldown/);
   assert.match(quick, /mcd-cooldown token/);
   assert.match(quick, /export MCD_MCP_TOKEN/);
   assert.match(quick, /mcd-cooldown init && mcd-cooldown setup claude/);
+  assert.match(quick, /重开 Claude Code/);
+  assert.match(quick, /mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒/);
   assert.match(quick, /docs\/faq\.md/);
+  assert.equal(quick.includes("git clone"), false);
+  assert.equal(quick.includes("npm link"), false);
+  assert.equal(quick.includes("sudo"), false);
   assert.equal(quick.includes("600057"), false);
   assert.equal(quick.includes("--menu-all"), false);
   assert.deepEqual(quick.match(/^\d+\. /gm), ["1. ", "2. ", "3. "]);
   const faq = readFileSync(join(root, "docs/faq.md"), "utf8");
+  assert.match(faq, /想改代码/);
+  assert.match(faq, /git clone https:\/\/github.com\/Adonis0123\/mcd-cooldown\.git/);
+  assert.match(faq, /npm run compile/);
   assert.match(faq, /node dist\/src\/cli\.js demo/);
   assert.match(faq, /node dist\/src\/cli\.js doctor --mock/);
   assert.match(faq, /node dist\/src\/cli\.js init/);
@@ -598,6 +614,7 @@ test("cli init --mock writes the picked store and meals without ordering", async
   assert.equal(wrote.code, 0, wrote.stderr);
   assert.match(wrote.stdout, /没有下单/);
   assert.match(wrote.stdout, /2026-10-12 12:00/);
+  assert.match(wrote.stdout, /下一步：.*setup claude/);
   assert.equal(wrote.stdout.includes("人气热卖"), false);
   assert.equal(wrote.stdout.includes("示例路 1 号"), false);
   assert.equal(wrote.stdout.includes("create-order"), false);
@@ -621,6 +638,27 @@ test("cli init --mock writes the picked store and meals without ordering", async
   const again = await run(["init", "--mock", "--city", "示例市", "--keyword", "示例路", "--store", "1", "--item", "1"], env);
   assert.notEqual(again.code, 0);
   assert.match(again.stderr, /配置已存在/);
+});
+
+test("init does not repeat setup claude when Claude is already configured", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-init-ready-"));
+  const env = envOf(home);
+  const settings = join(home, ".claude", "settings.json");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    settings,
+    `${JSON.stringify({ statusLine: { type: "command", command: `node ${cli} statusline`, padding: 0 } }, null, 2)}\n`,
+  );
+  assert.equal(claudeSetupPresent(settings), true);
+  assert.equal(claudeSetupPresent(join(home, "missing.json")), false);
+  const wrote = await run(
+    ["init", "--mock", "--city", "示例市", "--keyword", "示例路", "--store", "SAMPLE-STORE", "--item", "SAMPLE-001"],
+    env,
+  );
+  assert.equal(wrote.code, 0, wrote.stderr);
+  assert.match(wrote.stdout, /没有下单/);
+  assert.equal(wrote.stdout.includes("下一步"), false);
+  assert.equal(wrote.stdout.includes("setup claude"), false);
 });
 
 test("cli setup claude is idempotent and --print does not write", async () => {
