@@ -233,6 +233,17 @@ export function unavailableMealHint(now: Date, meals: MealClock = defaultMeals()
   return BEFORE_NEXT_MEAL_HINT;
 }
 
+/** Next lunch or dinner strictly after `now`, as `午饭 12:00`. Null when the clocks cannot be parsed. */
+export function nextMealLabel(
+  now: Date,
+  meals: { timezone: string; lunch: string; dinner: string } = defaultMeals(),
+): string | null {
+  const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner);
+  if (!next) return null;
+  const hm = next.slot === "lunch" ? meals.lunch : meals.dinner;
+  return `${next.slot === "lunch" ? "午饭" : "晚饭"} ${hm}`;
+}
+
 function upcomingMeal(
   now: Date,
   timeZone: string,

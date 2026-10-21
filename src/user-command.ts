@@ -20,7 +20,8 @@ export function mcdCooldownOnPath(env: NodeJS.ProcessEnv = process.env): boolean
 
 /**
  * Prefix for a command the user is expected to copy.
- * After `npm link` this is `mcd-cooldown`. Otherwise it is `node` plus this install's cli path.
+ * After a global install or `npm link` this is `mcd-cooldown`.
+ * Otherwise it is `node` plus this install's cli path.
  */
 export function userCommand(env: NodeJS.ProcessEnv = process.env): string {
   if (mcdCooldownOnPath(env)) return "mcd-cooldown";

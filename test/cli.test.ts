@@ -445,3 +445,24 @@ test("a priced request does not offer confirm after the token disappears", async
   assert.equal(hook.stdout.includes("confirm"), false);
   assert.equal(hook.stdout.includes(sampleToken), false);
 });
+
+test("idle statusline names the next meal without calling the network", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-idle-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      meals: { enabled: false, timezone: "Asia/Shanghai", weekends: false, lunch: "12:00", dinner: "18:30", prepMinutes: 20, lingerMinutes: 45, notify: false },
+      store: { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "鸡薯双全盒", items: [{ productCode: "SAMPLE-001", quantity: 1 }] },
+    }),
+  );
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: "", MCD_MCP_URL: "http://127.0.0.1:9", MCD_NOW: "2026-10-21T01:30:00.000Z" };
+  const line = await run(["statusline"], env, "{}\n");
+  assert.equal(line.code, 0, line.stderr);
+  assert.equal(line.stdout, "mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒\n");
+  assert.equal(line.stdout.includes("待命"), false);
+  const missing = await run(["statusline"], { ...env, MCD_HOME: mkdtempSync(join(tmpdir(), "mcd-cli-idle-empty-")) }, "{}\n");
+  assert.equal(missing.code, 0, missing.stderr);
+  assert.match(missing.stdout, /还没选门店和常点/);
+  assert.match(missing.stdout, /\binit\b/);
+});

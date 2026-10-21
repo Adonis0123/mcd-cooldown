@@ -23,13 +23,11 @@ Claude Code、Codex 或 Cursor 的额度见底，或者写到了午饭晚饭，�
 
 ## 三步开始
 
-1. 安装。`npm install` 会编译出 `dist/src/cli.js`，`npm link` 之后可以直接敲 `mcd-cooldown`。
+1. 安装。
 
 ```bash
-git clone https://github.com/Adonis0123/mcd-cooldown.git && cd mcd-cooldown && npm install && npm link
+npm install -g github:Adonis0123/mcd-cooldown
 ```
-
-不使用 `npm link` 时，停在 `npm install`，后面把 `mcd-cooldown` 换成 `node dist/src/cli.js`。权限不够就用 `sudo npm link`；找不到命令时执行 `export PATH="$(npm prefix -g)/bin:$PATH"`。
 
 2. 把 Token 留在本机文件里。不要写进仓库，也不要贴进对话。
 
@@ -45,7 +43,7 @@ mcd-cooldown token
 mcd-cooldown init && mcd-cooldown setup claude
 ```
 
-门店参数、`--mock`、doctor 和错误码见 [常见问题](docs/faq.md)。
+然后重开 Claude Code。空闲时状态栏类似 `mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒`。门店参数、`--mock`、doctor、错误码，以及想改代码时的克隆方式，见 [常见问题](docs/faq.md)。
 
 ## 它做什么
 
@@ -62,7 +60,11 @@ flowchart LR
 
 另一层是 **cooldown**。Claude Code 把额度窗口从状态栏标准输入送进来。接近用尽时，按 `resets_at` 倒推一个确认时间，并用你保存的常点餐品调用 `calculate-price`。到店自取是默认场景，起来走一趟也当作休息。确认之前没有任何订单。
 
-午饭和晚饭也走这一条状态栏。你配置的是想几点吃上，默认工作日 12:00 和 18:30。提醒时刻用出餐或配送时间往前倒：`calculate-price` 里若有预计分钟就用它，没有就用默认 20 分钟。只有已经核好价、并且有待确认请求时，状态栏才写成「现在确认，约 12:05 可取」。外送则是「现在确认，约 12:05 送达」。读不到 Token 时改为提示运行 `token`。核价没成功时提示运行 `plan` 看原因。每顿每天的 Stop hook 最多说一次。已吃或带了饭、稍后 15 分钟、今天跳过，各是一条命令。已经确认过的那顿，或者过了饭点 45 分钟，提醒自己消失。额度快用完又刚好是饭点时，合成一条，不说两遍。
+午饭和晚饭也走这一条状态栏。你配置的是想几点吃上，默认工作日 12:00 和 18:30。提醒时刻用出餐或配送时间往前倒：`calculate-price` 里若有预计分钟就用它，没有就用默认 20 分钟。只有已经核好价、并且有待确认请求时，状态栏才写成「现在确认，约 12:05 可取」。外送则是「现在确认，约 12:05 送达」。读不到 Token 时改为提示运行 `token`。核价没成功时提示运行 `plan` 看原因。每顿每天的 Stop hook 最多说一次。已吃或带了饭、稍后 15 分钟、今天跳过，各是一条命令。已经确认过的那顿，或者过了饭点 45 分钟，提醒自己消失。额度快用完又刚好是饭点时，合成一条，不说两遍。还没到提醒的时候，状态栏只留一行短状态，带上下一顿饭点和常点名称。还没选门店或常点时，会提示运行 `init`。这一行不联网，也不催你下单。
+
+```text
+mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒
+```
 
 ```text
 mcd · 午饭时间 · 起来吃一点 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · 确认 7f3a2c1b
@@ -80,13 +82,13 @@ mcd · 午饭时间 · 现在确认，约 12:05 可取 · 已核价 ¥36.50 · �
 
 ## 接到 Claude Code
 
-不用手贴 JSON。在仓库目录执行：
+不用手贴 JSON。执行：
 
 ```bash
 mcd-cooldown setup claude
 ```
 
-它会把下面这种状态栏和 Stop hook 合并进 `~/.claude/settings.json`，并把 `/ABSOLUTE/PATH` 换成这台机器上的绝对路径。原文件会先复制备份。再执行一次不会多加一条 hook。`setup claude --print` 只打印结果，不写文件。状态栏会频繁执行，所以命令指向本机文件，不走 `npx`。
+它会把下面这种状态栏和 Stop hook 合并进 `~/.claude/settings.json`，并把 `/ABSOLUTE/PATH` 换成这台机器上正在运行的 `cli.js` 绝对路径。全局安装后，这条路径在 prefix 的 `lib/node_modules/mcd-cooldown/dist/src/cli.js`，不看当前目录。原文件会先复制备份。再执行一次不会多加一条 hook。`setup claude --print` 只打印结果，不写文件。状态栏会频繁执行，所以命令指向本机文件，不走 `npx`。写完之后重开 Claude Code，状态栏才会出现。
 
 ```json
 {
@@ -182,7 +184,7 @@ mcd-cooldown watch <订单号>
 npm test
 ```
 
-测试使用合成样例，不连接官方服务，也不包含真实 Token、订单或地址。`init --mock` 和 `setup claude --print` 也在测试里。配置 Token 之后，用 `doctor` 做一次真实只读验证。
+测试使用合成样例，不连接官方服务，也不包含真实 Token、订单或地址。`init --mock` 和 `setup claude --print` 也在测试里。另外会在临时目录走一遍 `npm install -g` 的 git 安装，并核对 `dist/src` 与源码一致。配置 Token 之后，用 `doctor` 做一次真实只读验证。
 
 ## 参赛文件
 

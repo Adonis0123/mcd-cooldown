@@ -1,7 +1,8 @@
 node_modules/
 uploads/
 agent-tools/
-dist/
+dist/test/
+.dist-check/
 .env
 .env.*
 *.log

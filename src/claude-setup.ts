@@ -163,6 +163,32 @@ function writeAtomic(path: string, text: string, mode: number): void {
   renameSync(tmp, path);
 }
 
+const REOPEN =
+  "重开 Claude Code 后，状态栏会显示一行短状态。空闲时类似：mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒。还没选门店时，会提示运行 init。";
+
+export function claudeSetupPresent(settingsPath: string): boolean {
+  if (!existsSync(settingsPath)) return false;
+  let parsed: unknown;
+  try {
+    const raw = readFileSync(settingsPath, "utf8").replace(/^\uFEFF/, "");
+    if (!raw.trim()) return false;
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed)) return false;
+  const status = parsed.statusLine;
+  if (isRecord(status) && typeof status.command === "string" && isOurStatusline(status.command)) return true;
+  return containsOurHook(parsed.hooks);
+}
+
+function containsOurHook(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some((item) => containsOurHook(item));
+  if (!isRecord(node)) return false;
+  if (typeof node.command === "string" && isOurHook(node.command)) return true;
+  return Object.values(node).some((value) => value != null && typeof value === "object" && containsOurHook(value));
+}
+
 function describe(
   path: string,
   backup: string | null,
@@ -172,10 +198,11 @@ function describe(
   dryRun: boolean,
 ): string {
   if (dryRun) return "未写入（--print）。";
-  if (!changed) return `已经配置好：${path}\n没有重复添加，也没有再次备份。`;
+  if (!changed) return `已经配置好：${path}\n没有重复添加，也没有再次备份。\n${REOPEN}`;
   const lines = [created ? `已写入 ${path}` : `已合并到 ${path}`];
   if (backup) lines.push(`备份：${backup}`);
   lines.push("statusLine 和 Stop hook 已指向本机的 mcd-cooldown。");
   if (replaced) lines.push("原来的 statusLine 已换成本项目的命令，旧内容在备份里。");
+  lines.push(REOPEN);
   return lines.join("\n");
 }

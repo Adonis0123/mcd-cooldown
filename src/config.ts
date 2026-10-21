@@ -242,6 +242,14 @@ export function placeholderConfig(config: AppConfig): boolean {
   return values.some((value) => value != null && (value.startsWith("YOUR_") || value.includes("替换")));
 }
 
+/** Store and usual meal are filled in with real codes, so the status line can say it is ready. */
+export function readyConfig(config: AppConfig): boolean {
+  if (placeholderConfig(config)) return false;
+  if (!config.store?.storeCode?.trim()) return false;
+  if (!config.usual || config.usual.items.length === 0) return false;
+  return true;
+}
+
 export function assertHomeOutside(home: string, workspace: string): void {
   const root = resolve(workspace);
   const target = resolve(home);

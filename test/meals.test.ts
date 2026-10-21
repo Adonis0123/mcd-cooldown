@@ -124,6 +124,7 @@ test("quiet hours hide the meal reminder", () => {
   });
   assert.match(line, /先休息/);
   assert.equal(line.includes("晚饭"), false);
+  assert.equal(line.includes("已就绪"), false);
 });
 
 test("statusline shows one confirm line and merges with a quota countdown", () => {
