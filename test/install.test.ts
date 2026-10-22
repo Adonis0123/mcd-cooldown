@@ -55,6 +55,19 @@ test("global git install works without tsc and setup uses that absolute path", {
     });
     assert.equal(printed.status, 0, printed.stderr);
     assert.equal(existsSync(settings), false);
+    const help = spawnSync(bin, ["--help"], { encoding: "utf8", env: cleanEnv() });
+    assert.equal(help.status, 0, help.stderr);
+    assert.ok(help.stdout.indexOf("三步开始") >= 0 && help.stdout.indexOf("三步开始") < help.stdout.indexOf("其他命令"));
+    assert.match(help.stdout, /mcd-cooldown token/);
+    assert.match(help.stdout, /mcd-cooldown init && mcd-cooldown setup claude/);
+    assert.match(help.stdout, /0600/);
+    assert.match(help.stdout, /非麦当劳官方产品/);
+    assert.match(help.stdout, /默认只核价，不会自动下单/);
+    assert.equal(help.stdout.includes(cliPath), false);
+    const helpViaNode = spawnSync(process.execPath, [cliPath, "--help"], { encoding: "utf8", env: cleanEnv() });
+    assert.equal(helpViaNode.status, 0, helpViaNode.stderr);
+    assert.match(helpViaNode.stdout, /mcd-cooldown token/);
+    assert.equal(helpViaNode.stdout.includes(cliPath), false);
     const body = JSON.parse(printed.stdout) as {
       statusLine: { command: string };
       hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> };
@@ -74,8 +87,37 @@ test("global git install works without tsc and setup uses that absolute path", {
     });
     assert.equal(status.status, 0, status.stderr);
     assert.match(status.stdout, /还没选门店和常点/);
-    assert.match(status.stdout, /\binit\b/);
+    assert.match(status.stdout, /mcd-cooldown init/);
+    assert.equal(status.stdout.includes(cliPath), false);
     assert.equal(status.stdout.includes("待命"), false);
+    const init = spawnSync(process.execPath, [cliPath, "init"], {
+      encoding: "utf8",
+      env: cleanEnv({
+        HOME: home,
+        MCD_HOME: join(home, "mcd"),
+        MCD_MCP_TOKEN: "",
+      }),
+    });
+    assert.notEqual(init.status, 0);
+    assert.match(init.stderr, /mcd-cooldown token/);
+    assert.match(init.stderr, /mcd-cooldown init/);
+    assert.equal(init.stderr.includes(cliPath), false);
+    const ready = spawnSync(
+      process.execPath,
+      [cliPath, "init", "--mock", "--meals", "--city", "示例市", "--keyword", "示例路", "--store", "SAMPLE-STORE", "--item", "SAMPLE-001", "--item", "2"],
+      {
+        encoding: "utf8",
+        env: cleanEnv({
+          HOME: home,
+          MCD_HOME: join(home, "mcd"),
+          MCD_MCP_TOKEN: "",
+        }),
+      },
+    );
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.match(ready.stdout, /下一步：mcd-cooldown setup claude/);
+    assert.match(ready.stdout, /mcd-cooldown meals weekends on/);
+    assert.equal(ready.stdout.includes(cliPath), false);
   } finally {
     rmSync(stage, { recursive: true, force: true });
     rmSync(prefix, { recursive: true, force: true });

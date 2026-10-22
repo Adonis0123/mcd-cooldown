@@ -191,7 +191,7 @@ export function formatInitSummary(file: string, result: RunInitResult): string {
  * same next meal and save the same items.
  */
 const READY_BEFORE_MEAL =
-  "门店和常点已经就绪，下一顿饭点提醒前会核价，要再核对门店可运行 doctor --city 城市 --keyword 关键词。";
+  "门店和常点已经就绪。下一顿饭点提醒前会核价。要再核对门店，可运行 doctor --city 城市 --keyword 关键词。";
 
 export const BREAKFAST_HOUR_HINT =
   `现在还是早餐时段，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。${READY_BEFORE_MEAL}`;
