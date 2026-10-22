@@ -434,7 +434,7 @@ test("copy-paste commands use mcd-cooldown for a bin and node plus path for a cl
   const direct = userCommand(onPath, [process.execPath, cli, "--help"]);
   assert.match(direct, /^node /);
   assert.match(direct, /cli\.js$/);
-  assert.equal(direct.includes("mcd-cooldown"), false);
+  assert.equal(usesBinCommand(direct), false);
 
   const linkDir = mkdtempSync(join(tmpdir(), "mcd-link-"));
   const linkedCli = join(linkDir, "cli.js");
@@ -475,15 +475,20 @@ test("copy-paste commands use mcd-cooldown for a bin and node plus path for a cl
     "mcd-cooldown",
   );
 
-  const cloneRoot = mkdtempSync(join(tmpdir(), "mcd-clone-"));
-  const cloneCli = join(cloneRoot, "my project/dist/src/cli.js");
+  const cloneRoot = mkdtempSync(join(tmpdir(), "mcd-checkout-"));
+  const cloneCli = join(cloneRoot, "mcd-cooldown/my project/dist/src/cli.js");
   mkdirSync(dirname(cloneCli), { recursive: true });
   writeFileSync(cloneCli, "#!/usr/bin/env node\n");
   const cloneShown = resolveUserCommand(cloneCli, onPath, [process.execPath, cloneCli, "--help"]);
   assert.match(cloneShown, /^node '/);
-  assert.match(cloneShown, /cli\.js'$/);
-  assert.equal(cloneShown.includes("mcd-cooldown"), false);
+  assert.match(cloneShown, /mcd-cooldown\/my project\/dist\/src\/cli\.js'$/);
+  assert.equal(usesBinCommand(cloneShown), false);
 });
+
+/** The checkout directory is named mcd-cooldown, so the node path may contain that word. */
+function usesBinCommand(command: string): boolean {
+  return /^mcd-cooldown(?:\s|$)/.test(command);
+}
 
 function daypartCaller(): ToolCaller {
   const stores = new FixtureBackend();
