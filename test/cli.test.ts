@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -464,5 +464,94 @@ test("idle statusline names the next meal without calling the network", async ()
   const missing = await run(["statusline"], { ...env, MCD_HOME: mkdtempSync(join(tmpdir(), "mcd-cli-idle-empty-")) }, "{}\n");
   assert.equal(missing.code, 0, missing.stderr);
   assert.match(missing.stdout, /还没选门店和常点/);
-  assert.match(missing.stdout, /\binit\b/);
+  assert.match(missing.stdout, /node /);
+  assert.match(missing.stdout, /cli\.js init/);
 });
+
+test("help leads with the three steps, and bin hints differ from node hints", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-help-"));
+  const isolated = {
+    ...process.env,
+    HOME: home,
+    MCD_HOME: join(home, "mcd"),
+    MCD_MCP_TOKEN: "",
+    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+  };
+  const direct = await run(["--help"], isolated);
+  assert.equal(direct.code, 0, direct.stderr);
+  assertHelpShape(direct.stdout, /cli\.js token/, /cli\.js init && node /);
+  assert.equal(direct.stdout.includes("\n  mcd-cooldown token\n"), false);
+  assert.equal(direct.stdout.includes("\n  2. mcd-cooldown token\n"), false);
+
+  const stage = mkdtempSync(join(tmpdir(), "mcd-cli-stage-"));
+  cpSync(dirname(cli), join(stage, "dist/src"), { recursive: true });
+  const stagedCli = join(stage, "dist/src/cli.js");
+  chmodSync(stagedCli, 0o755);
+  const bin = join(stage, "mcd-cooldown");
+  symlinkSync(stagedCli, bin);
+  const viaBin = spawnSync(bin, ["--help"], { encoding: "utf8", env: isolated });
+  assert.equal(viaBin.status, 0, viaBin.stderr);
+  assertHelpShape(viaBin.stdout, /mcd-cooldown token/, /mcd-cooldown init && mcd-cooldown setup claude/);
+  assert.equal(viaBin.stdout.includes("cli.js"), false);
+
+  const status = spawnSync(bin, ["statusline"], { encoding: "utf8", input: "{}\n", env: isolated });
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /mcd-cooldown init/);
+  assert.equal(status.stdout.includes("cli.js"), false);
+
+  const init = spawnSync(bin, ["init"], { encoding: "utf8", env: isolated });
+  assert.notEqual(init.status, 0);
+  assert.match(init.stderr, /mcd-cooldown token/);
+  assert.match(init.stderr, /mcd-cooldown init/);
+  assert.equal(init.stderr.includes("cli.js"), false);
+  const readyHome = mkdtempSync(join(tmpdir(), "mcd-cli-bin-init-"));
+  const ready = spawnSync(
+    bin,
+    ["init", "--mock", "--meals", "--city", "示例市", "--keyword", "示例路", "--store", "SAMPLE-STORE", "--item", "SAMPLE-001", "--item", "2"],
+    { encoding: "utf8", env: { ...isolated, HOME: readyHome, MCD_HOME: join(readyHome, "mcd") } },
+  );
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.match(ready.stdout, /下一步：mcd-cooldown setup claude/);
+  assert.match(ready.stdout, /mcd-cooldown meals weekends on/);
+  assert.equal(ready.stdout.includes("cli.js"), false);
+
+  const settings = join(home, "settings.json");
+  const printed = spawnSync(bin, ["setup", "claude", "--print", "--settings", settings], { encoding: "utf8", env: isolated });
+  assert.equal(printed.status, 0, printed.stderr);
+  const body = JSON.parse(printed.stdout) as { statusLine: { command: string }; hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> } };
+  assert.match(body.statusLine.command, /^node /);
+  assert.match(body.statusLine.command, /dist\/src\/cli\.js statusline$/);
+  assert.match(body.hooks.Stop[0]?.hooks[0]?.command ?? "", /dist\/src\/cli\.js hook$/);
+  assert.equal(body.statusLine.command.includes("mcd-cooldown statusline"), false);
+  assert.equal(existsSync(settings), false);
+
+  const decoy = mkdtempSync(join(tmpdir(), "mcd-cli-decoy-"));
+  const decoyBin = join(decoy, "mcd-cooldown");
+  writeFileSync(decoyBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(decoyBin, 0o755);
+  const shadowed = await run(["--help"], { ...isolated, PATH: `${decoy}:/usr/bin:/bin` });
+  assert.equal(shadowed.code, 0, shadowed.stderr);
+  assert.match(shadowed.stdout, /cli\.js token/);
+  assert.equal(shadowed.stdout.includes("\n  2. mcd-cooldown token\n"), false);
+
+  const nodeInit = await run(["init"], isolated);
+  assert.notEqual(nodeInit.code, 0);
+  assert.match(nodeInit.stderr, /cli\.js token/);
+  assert.match(nodeInit.stderr, /cli\.js init/);
+  assert.equal(nodeInit.stderr.includes("mcd-cooldown init"), false);
+});
+
+function assertHelpShape(help: string, token: RegExp, setup: RegExp): void {
+  const start = help.indexOf("三步开始");
+  const other = help.indexOf("其他命令");
+  const plan = help.indexOf("plan");
+  assert.ok(start >= 0 && other > start && plan > other, help);
+  assert.match(help, /npm install -g github:Adonis0123\/mcd-cooldown/);
+  assert.match(help, token);
+  assert.match(help, setup);
+  assert.match(help, /0600/);
+  assert.match(help, /非麦当劳官方产品/);
+  assert.match(help, /默认只核价，不会自动下单/);
+  assert.match(help, /init 只读查询门店和菜单，不会下单/);
+  assert.ok(help.trim().split("\n").length < 30, String(help.trim().split("\n").length));
+}

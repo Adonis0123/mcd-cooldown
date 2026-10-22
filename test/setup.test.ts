@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { flagBool, flagList, flagString, parseArgs } from "../src/args.js";
@@ -30,7 +30,7 @@ import { MEAL_UNAVAILABLE_HINT, unwrapPayload } from "../src/mcp/parse.js";
 import type { ToolCaller } from "../src/mcp/types.js";
 import { orderArgsFromConfig } from "../src/order-flow.js";
 import { zonedInstant } from "../src/time.js";
-import { userCommand } from "../src/user-command.js";
+import { resolveUserCommand, userCommand } from "../src/user-command.js";
 import { UserError } from "../src/user-error.js";
 
 const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
@@ -288,9 +288,8 @@ test("60006 wording follows the next lunch and dinner clock", () => {
   const breakfast = unavailableMealHint(morning);
   assert.equal(breakfast, BREAKFAST_HOUR_HINT);
   assert.match(breakfast, /早餐时段/);
-  assert.match(breakfast, /门店和常点已经就绪/);
-  assert.match(breakfast, /下一顿饭点提醒前会核价/);
-  assert.match(breakfast, /doctor --city/);
+  assert.match(breakfast, /门店和常点已经就绪。下一顿饭点提醒前会核价。要再核对门店，可运行 doctor --city 城市 --keyword 关键词。/);
+  assert.equal(breakfast.includes("已经就绪，下一顿"), false);
   assert.equal(breakfast.includes("换一份"), false);
   assert.equal(breakfast.includes("重新跑 init 换"), false);
 
@@ -418,18 +417,72 @@ test("unresolved init picks still print the list, resolved picks stay quiet", as
   assert.equal(menuLines.join("\n").includes("示例路 1 号"), false);
 });
 
-test("copy-paste commands use mcd-cooldown only when it is on PATH", () => {
+test("copy-paste commands use mcd-cooldown for a bin and node plus path for a clone", () => {
   const dir = mkdtempSync(join(tmpdir(), "mcd-bin-"));
   const bin = join(dir, "mcd-cooldown");
   writeFileSync(bin, "#!/bin/sh\nexit 0\n");
   chmodSync(bin, 0o755);
-  const linked = userCommand({ ...process.env, PATH: `${dir}${delimiter}/usr/bin` });
+  const onPath = { ...process.env, PATH: `${dir}${delimiter}/usr/bin` };
+  const linked = userCommand(onPath, [process.execPath, "not-the-cli.js"]);
   assert.equal(linked, "mcd-cooldown");
   const empty = mkdtempSync(join(tmpdir(), "mcd-empty-path-"));
-  const missing = userCommand({ ...process.env, PATH: empty });
+  const missing = userCommand({ ...process.env, PATH: empty }, [process.execPath, "not-the-cli.js"]);
   assert.notEqual(missing, "mcd-cooldown");
   assert.match(missing, /^node /);
   assert.match(missing, /cli\.js$/);
+
+  const direct = userCommand(onPath, [process.execPath, cli, "--help"]);
+  assert.match(direct, /^node /);
+  assert.match(direct, /cli\.js$/);
+  assert.equal(direct.includes("mcd-cooldown"), false);
+
+  const linkDir = mkdtempSync(join(tmpdir(), "mcd-link-"));
+  const linkedCli = join(linkDir, "cli.js");
+  writeFileSync(linkedCli, readFileSync(cli));
+  chmodSync(linkedCli, 0o755);
+  const link = join(linkDir, "mcd-cooldown");
+  symlinkSync(linkedCli, link);
+  assert.equal(resolveUserCommand(linkedCli, { ...process.env, PATH: empty }, [process.execPath, link, "--help"]), "mcd-cooldown");
+
+  const shimDir = join(linkDir, "shim-mcd");
+  mkdirSync(shimDir);
+  const shimBin = join(shimDir, "mcd-cooldown");
+  writeFileSync(shimBin, `#!/usr/bin/env node\nimport(${JSON.stringify(realpathSync(linkedCli))});\n`);
+  chmodSync(shimBin, 0o755);
+  assert.equal(resolveUserCommand(linkedCli, { PATH: empty }, [process.execPath, shimBin, "statusline"]), "mcd-cooldown");
+
+  const prefix = mkdtempSync(join(tmpdir(), "mcd-prefix-"));
+  const installed = join(prefix, "lib/node_modules/mcd-cooldown/dist/src/cli.js");
+  mkdirSync(dirname(installed), { recursive: true });
+  writeFileSync(installed, "#!/usr/bin/env node\n");
+  chmodSync(installed, 0o755);
+  const prefixBin = join(prefix, "bin");
+  mkdirSync(prefixBin);
+  symlinkSync(relative(prefixBin, installed), join(prefixBin, "mcd-cooldown"));
+  const fromStatusline = resolveUserCommand(installed, { PATH: "/usr/bin:/bin" }, [process.execPath, installed, "statusline"]);
+  assert.equal(fromStatusline, "mcd-cooldown");
+
+  const plainPrefix = mkdtempSync(join(tmpdir(), "mcd-prefix-plain-"));
+  const plainCli = join(plainPrefix, "node_modules/mcd-cooldown/dist/src/cli.js");
+  mkdirSync(dirname(plainCli), { recursive: true });
+  writeFileSync(plainCli, "#!/usr/bin/env node\n");
+  chmodSync(plainCli, 0o755);
+  const plainBin = join(plainPrefix, "bin");
+  mkdirSync(plainBin);
+  symlinkSync(relative(plainBin, plainCli), join(plainBin, "mcd-cooldown"));
+  assert.equal(
+    resolveUserCommand(plainCli, { PATH: "/usr/bin" }, [process.execPath, plainCli, "--help"]),
+    "mcd-cooldown",
+  );
+
+  const cloneRoot = mkdtempSync(join(tmpdir(), "mcd-clone-"));
+  const cloneCli = join(cloneRoot, "my project/dist/src/cli.js");
+  mkdirSync(dirname(cloneCli), { recursive: true });
+  writeFileSync(cloneCli, "#!/usr/bin/env node\n");
+  const cloneShown = resolveUserCommand(cloneCli, onPath, [process.execPath, cloneCli, "--help"]);
+  assert.match(cloneShown, /^node '/);
+  assert.match(cloneShown, /cli\.js'$/);
+  assert.equal(cloneShown.includes("mcd-cooldown"), false);
 });
 
 function daypartCaller(): ToolCaller {
@@ -614,7 +667,8 @@ test("cli init --mock writes the picked store and meals without ordering", async
   assert.equal(wrote.code, 0, wrote.stderr);
   assert.match(wrote.stdout, /没有下单/);
   assert.match(wrote.stdout, /2026-10-12 12:00/);
-  assert.match(wrote.stdout, /下一步：.*setup claude/);
+  assert.match(wrote.stdout, /下一步：node .*cli\.js setup claude/);
+  assert.match(wrote.stdout, /cli\.js meals weekends on/);
   assert.equal(wrote.stdout.includes("人气热卖"), false);
   assert.equal(wrote.stdout.includes("示例路 1 号"), false);
   assert.equal(wrote.stdout.includes("create-order"), false);

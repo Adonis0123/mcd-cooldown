@@ -31,30 +31,22 @@ function helpText() {
     return `mcd-cooldown ${VERSION}
 额度用完，先核价。本地网关拦住写操作，确认后才提交。
 
-  ${cmd} doctor [--mock] [--city 城市 --keyword 关键词]
-  ${cmd} guard
-  ${cmd} serve [--port 39217]
+三步开始
+  1. npm install -g github:Adonis0123/mcd-cooldown
+  2. ${cmd} token
+  3. ${cmd} init && ${cmd} setup claude
+
+其他命令
   ${cmd} plan [--mock] [--allow-quiet]
-  ${cmd} statusline
-  ${cmd} hook [--no-prepare] [--mock]
-  ${cmd} confirm <请求号> [--allow-quiet] [--retry]
-  ${cmd} deny <请求号>
-  ${cmd} pending
-  ${cmd} log
-  ${cmd} watch <订单号>
-  ${cmd} meals on
-  ${cmd} meals lunch 12:00
-  ${cmd} meals dinner 18:30
-  ${cmd} meals weekends on
-  ${cmd} ate
-  ${cmd} later
-  ${cmd} skip
+  ${cmd} confirm <请求号> [--allow-quiet] [--retry]  ${cmd} deny <请求号>
+  ${cmd} doctor [--mock] [--city 城市 --keyword 关键词]
+  ${cmd} pending  ${cmd} log  ${cmd} watch <订单号>
+  ${cmd} meals on | lunch 12:00 | dinner 18:30 | weekends on
+  ${cmd} ate | later | skip
+  ${cmd} guard | serve [--port 39217] | statusline | hook [--no-prepare] [--mock]
   ${cmd} init [--mock] [--meals] [--menu-all] [--city 城市 --keyword 关键词 --store 门店 --item 餐品]
-  ${cmd} token
-  ${cmd} token --clear
-  ${cmd} setup claude [--print | --dry-run]
-  ${cmd} demo
-  ${cmd} mock [--port 39217]
+  ${cmd} setup claude [--print]  ${cmd} token --clear
+  ${cmd} demo | mock [--port 39217]
 
 Token 用 ${cmd} token 写到本机 ~/.mcd-cooldown/token，权限 0600，不会回显。
 环境变量 MCD_MCP_TOKEN 优先，但只对当前终端有效。
