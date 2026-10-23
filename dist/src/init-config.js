@@ -148,13 +148,21 @@ export function formatInitSummary(file, result) {
     ].join("\n");
 }
 /**
- * Saved lunch/dinner items are not on sale yet. Re-running init would query the
- * same next meal and save the same items.
+ * Saved lunch/dinner items are not on sale yet. One short sentence: name the
+ * next meal clock once. Repeating the quote, and telling the user to confirm
+ * or re-run init, is wrong when nothing is waiting.
  */
-const READY_BEFORE_MEAL = "门店和常点已经就绪。下一顿饭点提醒前会核价。要再核对门店，可运行 doctor --city 城市 --keyword 关键词。";
-export const BREAKFAST_HOUR_HINT = `现在还是早餐时段，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。${READY_BEFORE_MEAL}`;
+function notOnSaleLine(lead, nextLabel) {
+    const when = nextLabel ? `${nextLabel} 前会提前核价` : "饭点前会提前核价";
+    return `${lead}，${when}。`;
+}
+export function breakfastHourHint(now, meals = defaultMeals()) {
+    return notOnSaleLine("早餐时段正餐还没开卖", nextMealLabel(now, meals));
+}
 /** Before the next configured meal, but not the same-day breakfast gap before lunch. */
-export const BEFORE_NEXT_MEAL_HINT = `下一顿午饭或晚饭还没到，保存的正餐还没开卖。饭点提醒会在饭点前核价，不必重新跑 init。${READY_BEFORE_MEAL}`;
+export function beforeNextMealHint(now, meals = defaultMeals()) {
+    return notOnSaleLine("下一顿正餐还没开卖", nextMealLabel(now, meals));
+}
 /**
  * Next lunch or dinner, strictly after `now`, as `yyyy-MM-dd HH:mm`.
  * Init has no saved config yet, so the clocks default to 12:00 and 18:30.
@@ -177,9 +185,9 @@ export function unavailableMealHint(now, meals = defaultMeals()) {
         return MEAL_UNAVAILABLE_HINT;
     const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner);
     if (next?.slot === "lunch" && zonedParts(now, meals.timezone).ymd === zonedParts(next.at, meals.timezone).ymd) {
-        return BREAKFAST_HOUR_HINT;
+        return breakfastHourHint(now, meals);
     }
-    return BEFORE_NEXT_MEAL_HINT;
+    return beforeNextMealHint(now, meals);
 }
 /** Next lunch or dinner strictly after `now`, as `午饭 12:00`. Null when the clocks cannot be parsed. */
 export function nextMealLabel(now, meals = defaultMeals()) {

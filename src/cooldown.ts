@@ -200,7 +200,7 @@ export async function preparePlan(input: {
   const plan: PlanState = {
     preparedAt: input.now.toISOString(),
     headline: schedule.headline,
-    hint: schedule.hint,
+    hint: pendingId ? schedule.hint : hintWithoutPendingConfirm(schedule.hint),
     quiet: schedule.quiet,
     quoteCents,
     label: input.config.usual?.label ?? null,
@@ -295,8 +295,24 @@ export async function runHook(input: {
 function priceSentence(cents: number | null, note: string | null | undefined, empty: string): string {
   if (cents != null) return `已按你保存的份量核价 ¥${formatYuanFromCents(cents)}，尚未下单。`;
   if (note?.includes(MEAL_UNAVAILABLE_HINT)) return `${MEAL_UNAVAILABLE_HINT}。程序没有下单。`;
-  if (note?.includes("不必重新跑 init")) return `${note.trim()}程序没有下单。`;
+  if (note && /还没开卖|不必重新跑 init/.test(note)) return `${note.trim().replace(/。$/, "")}。程序没有下单。`;
   return empty;
+}
+
+/** Countdown copy that tells you to confirm. Only accurate once a request is waiting. */
+function hintWithoutPendingConfirm(hint: string): string {
+  if (hint.includes("前确认") || hint.includes("现在只是核价") || hint.includes("确认后才会下单")) {
+    return "起来活动一下。";
+  }
+  return hint;
+}
+
+function quotaActivityLead(schedule: { headline: string; hint: string; remainingLabel: string | null }): string {
+  if (schedule.remainingLabel && schedule.remainingLabel !== "即将恢复") {
+    return `额度约 ${schedule.remainingLabel}后恢复，起来活动一下。`;
+  }
+  if (schedule.remainingLabel === "即将恢复") return "额度窗口已到恢复时间，起来活动一下。";
+  return `额度${schedule.headline}。${schedule.hint}`;
 }
 
 function tokenSentence(tokenMissing: boolean): string {
@@ -336,9 +352,13 @@ function hookText(
     return `${meal.phrase}到了，起来吃一点。${when}${quota}${fail}${mealPrice}${confirm}这顿可以记成已吃、稍后再说或今天跳过：${cmd} ate、later、skip。`;
   }
   if (primary && primary.usedPercentage >= config.quotaThreshold) {
-    if (tokenMissing) return `额度${schedule.headline}。${schedule.hint}${price}${missing}`.replace(/\s+/g, " ").trim();
-    const confirm = plan?.pendingId ? `要下单请在本机执行 ${cmd} confirm ${plan.pendingId}。` : "";
-    return `额度${schedule.headline}。${schedule.hint}${price}${confirm}`.replace(/\s+/g, " ").trim();
+    if (plan?.pendingId) {
+      if (tokenMissing) return `额度${schedule.headline}。${schedule.hint}${price}${missing}`.replace(/\s+/g, " ").trim();
+      return `额度${schedule.headline}。${schedule.hint}${price}要下单请在本机执行 ${cmd} confirm ${plan.pendingId}。`
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+    return `${quotaActivityLead(schedule)}${price}${missing}`.replace(/\s+/g, " ").trim();
   }
   if (tokenMissing) return `这轮已经写了一段时间，起来活动一下。${price}${missing}`;
   return `这轮已经写了一段时间，起来活动一下。${price}程序不会自动下单。`;

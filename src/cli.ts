@@ -40,7 +40,8 @@ function helpText(): string {
 
 其他命令
   ${cmd} plan [--mock] [--allow-quiet]
-  ${cmd} confirm <请求号> [--allow-quiet] [--retry]  ${cmd} deny <请求号>
+  ${cmd} confirm <请求号> [--allow-quiet] [--retry]
+  ${cmd} deny <请求号>
   ${cmd} doctor [--mock] [--city 城市 --keyword 关键词]
   ${cmd} pending  ${cmd} log  ${cmd} watch <订单号>
   ${cmd} meals on | lunch 12:00 | dinner 18:30 | weekends on
