@@ -19,8 +19,8 @@ import {
   MENU_PREVIEW_LIMIT,
   nextMealReservationDate,
   unavailableMealHint,
-  BREAKFAST_HOUR_HINT,
-  BEFORE_NEXT_MEAL_HINT,
+  breakfastHourHint,
+  beforeNextMealHint,
   pickByToken,
   runInit,
   type MenuItem,
@@ -286,12 +286,20 @@ test("menu category headers collapse newlines onto one line", () => {
 test("60006 wording follows the next lunch and dinner clock", () => {
   const morning = zonedInstant(2026, 10, 14, 8, 30, "Asia/Shanghai");
   const breakfast = unavailableMealHint(morning);
-  assert.equal(breakfast, BREAKFAST_HOUR_HINT);
-  assert.match(breakfast, /早餐时段/);
-  assert.match(breakfast, /门店和常点已经就绪。下一顿饭点提醒前会核价。要再核对门店，可运行 doctor --city 城市 --keyword 关键词。/);
-  assert.equal(breakfast.includes("已经就绪，下一顿"), false);
+  assert.equal(breakfast, breakfastHourHint(morning));
+  assert.equal(breakfast, "早餐时段正餐还没开卖，午饭 12:00 前会提前核价。");
+  assert.equal((breakfast.match(/核价/g) ?? []).length, 1);
+  assert.equal(breakfast.includes("确认"), false);
   assert.equal(breakfast.includes("换一份"), false);
   assert.equal(breakfast.includes("重新跑 init 换"), false);
+  const lateBreakfast = unavailableMealHint(morning, {
+    timezone: "Asia/Shanghai",
+    lunch: "12:15",
+    dinner: "18:30",
+    prepMinutes: 20,
+    lingerMinutes: 45,
+  });
+  assert.equal(lateBreakfast, "早餐时段正餐还没开卖，午饭 12:15 前会提前核价。");
 
   const nearLunch = zonedInstant(2026, 10, 14, 11, 50, "Asia/Shanghai");
   assert.equal(unavailableMealHint(nearLunch), MEAL_UNAVAILABLE_HINT);
@@ -304,9 +312,13 @@ test("60006 wording follows the next lunch and dinner clock", () => {
     prepMinutes: 20,
     lingerMinutes: 45,
   });
-  assert.equal(beforeDinner, BEFORE_NEXT_MEAL_HINT);
-  assert.match(beforeDinner, /门店和常点已经就绪/);
-  assert.match(beforeDinner, /doctor --city/);
+  assert.equal(beforeDinner, beforeNextMealHint(afternoon, {
+    timezone: "Asia/Shanghai",
+    lunch: "12:00",
+    dinner: "18:30",
+  }));
+  assert.equal(beforeDinner, "下一顿正餐还没开卖，晚饭 18:30 前会提前核价。");
+  assert.equal((beforeDinner.match(/核价/g) ?? []).length, 1);
   assert.equal(beforeDinner.includes("早餐时段"), false);
   assert.equal(beforeDinner.includes("换一份"), false);
 

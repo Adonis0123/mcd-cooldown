@@ -126,11 +126,10 @@ test("morning plan exits 0 and says the saved meal is ready", async () => {
   };
   const plan = await run(["plan", "--mock"], env);
   assert.equal(plan.code, 0, plan.stderr);
-  assert.match(plan.stdout, /早餐时段/);
-  assert.match(plan.stdout, /门店和常点已经就绪/);
-  assert.match(plan.stdout, /下一顿饭点提醒前会核价/);
-  assert.match(plan.stdout, /doctor --city/);
-  assert.match(plan.stdout, /不必重新跑 init/);
+  assert.match(plan.stdout, /早餐时段正餐还没开卖，午饭 12:00 前会提前核价/);
+  assert.equal((plan.stdout.match(/核价/g) ?? []).length, 1);
+  assert.equal(plan.stdout.includes("确认"), false);
+  assert.equal(plan.stdout.includes("现在只是核价"), false);
   assert.equal(plan.stdout.includes("换一份"), false);
   assert.equal(plan.stdout.includes("重新跑 init 换"), false);
 
@@ -138,6 +137,90 @@ test("morning plan exits 0 and says the saved meal is ready", async () => {
   assert.equal(nearLunch.code, 0, nearLunch.stderr);
   assert.match(nearLunch.stdout, /重新跑 init 换一份/);
   assert.equal(nearLunch.stdout.includes("门店和常点已经就绪"), false);
+});
+
+test("breakfast quota hook and plan stay short when nothing is waiting", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-breakfast-quota-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      meals: { lunch: "12:00", dinner: "18:30" },
+      store: { storeCode: "1400123", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "午饭", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] },
+    }),
+  );
+  const now = "2026-10-23T01:50:00.000Z";
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: "", MCD_NOW: now };
+  const resetsAt = Date.parse(now) / 1000 + 40 * 60;
+  const raw = `${JSON.stringify({ rate_limits: { five_hour: { used_percentage: 95, resets_at: resetsAt } } })}\n`;
+  const hook = await run(["hook", "--mock"], env, raw);
+  assert.equal(hook.code, 0, hook.stderr);
+  assert.equal(
+    hook.stdout,
+    "额度约 40 分钟后恢复，起来活动一下。早餐时段正餐还没开卖，午饭 12:00 前会提前核价。程序没有下单。\n",
+  );
+  assert.equal(hook.stdout.includes("确认"), false);
+
+  const plan = await run(["plan", "--mock"], env);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.equal(
+    plan.stdout,
+    "约 40 分钟后恢复\n起来活动一下。\n早餐时段正餐还没开卖，午饭 12:00 前会提前核价。\n",
+  );
+  assert.equal(plan.stdout.includes("确认"), false);
+  assert.equal((plan.stdout.match(/核价/g) ?? []).length, 1);
+});
+
+test("a priced quota hook still prints the confirm command", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-priced-quota-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      store: { storeCode: "SAMPLE-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "常点一份", items: [{ productCode: "SAMPLE-001", quantity: 1 }] },
+    }),
+  );
+  const now = "2026-10-23T01:50:00.000Z";
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: "", MCD_NOW: now };
+  const resetsAt = Date.parse(now) / 1000 + 40 * 60;
+  const raw = `${JSON.stringify({ rate_limits: { five_hour: { used_percentage: 95, resets_at: resetsAt } } })}\n`;
+  const hook = await run(["hook", "--mock"], env, raw);
+  assert.equal(hook.code, 0, hook.stderr);
+  assert.match(hook.stdout, /建议 10:10 前确认。到店自取，起身活动一下。现在只是核价。/);
+  assert.match(hook.stdout, /要下单请在本机执行 .+ confirm [0-9a-f]{8}/);
+  assert.equal(hook.stdout.includes("早餐时段"), false);
+  assert.equal(hook.stdout.includes("程序没有下单"), false);
+
+  const plan = await run(["plan", "--mock"], env);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.match(plan.stdout, /建议 10:10 前确认。到店自取，起身活动一下。现在只是核价。/);
+  assert.match(plan.stdout, /confirm [0-9a-f]{8}/);
+});
+
+test("a failed quote with no pending request does not ask you to confirm", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-cli-closed-quota-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      store: { storeCode: "CLOSED-STORE", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "常点一份", items: [{ productCode: "SAMPLE-001", quantity: 1 }] },
+    }),
+  );
+  const now = "2026-10-23T01:50:00.000Z";
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: "", MCD_NOW: now };
+  const resetsAt = Date.parse(now) / 1000 + 40 * 60;
+  const raw = `${JSON.stringify({ rate_limits: { five_hour: { used_percentage: 95, resets_at: resetsAt } } })}\n`;
+  const hook = await run(["hook", "--mock"], env, raw);
+  assert.equal(hook.code, 0, hook.stderr);
+  assert.match(hook.stdout, /额度约 40 分钟后恢复，起来活动一下/);
+  assert.equal(hook.stdout.includes("确认"), false);
+  assert.equal(hook.stdout.includes("现在只是核价"), false);
+  const plan = await run(["plan", "--mock"], env);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.match(plan.stdout, /门店当前不营业/);
+  assert.match(plan.stdout, /起来活动一下/);
+  assert.equal(plan.stdout.includes("确认"), false);
+  assert.equal(plan.stdout.includes("建议"), false);
 });
 
 test("stdio guard holds create-order and confirm submits it once", async () => {
@@ -554,4 +637,10 @@ function assertHelpShape(help: string, token: RegExp, setup: RegExp): void {
   assert.match(help, /默认只核价，不会自动下单/);
   assert.match(help, /init 只读查询门店和菜单，不会下单/);
   assert.ok(help.trim().split("\n").length < 30, String(help.trim().split("\n").length));
+  const confirm = help.split("\n").find((line) => line.includes("confirm <请求号>"));
+  const deny = help.split("\n").find((line) => line.includes("deny <请求号>"));
+  assert.ok(confirm);
+  assert.ok(deny);
+  assert.equal(confirm?.includes("deny"), false);
+  assert.notEqual(confirm, deny);
 }
