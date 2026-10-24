@@ -1,6 +1,8 @@
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { CATALOG, toolEffect } from "./catalog.js";
 import { asText, isRecord } from "./is.js";
-import { findTokenInTree } from "./leak.js";
+import { pathInside, scanForToken } from "./leak.js";
 import { businessFailed, payloadRecord, textOf, unwrapPayload } from "./mcp/parse.js";
 import { scrubForLog } from "./redact.js";
 import { UpstreamError } from "./mcp/client.js";
@@ -31,12 +33,32 @@ export async function runDoctor(input) {
         }
     }
     if (input.token && input.workspace) {
-        const leaks = findTokenInTree(input.workspace, input.token);
-        if (leaks.length > 0) {
-            lines.push(`Token 出现在项目文件里：${leaks.join(", ")}。请删掉后重新申请 Token。`);
+        const workspace = resolve(input.workspace);
+        const configHome = input.configHome ? resolve(input.configHome) : null;
+        const scanningHome = workspace === resolve(homedir());
+        const ignore = new Set();
+        if (configHome)
+            ignore.add(configHome);
+        ignore.add(resolve(join(homedir(), ".mcd-cooldown")));
+        const scanned = scanForToken(workspace, input.token, {
+            ignore: [...ignore],
+            skipTopHiddenDirs: scanningHome,
+            maxFiles: scanningHome ? 2000 : 8000,
+            maxEntries: scanningHome ? 6000 : 20000,
+        });
+        if (scanned.hits.length > 0) {
+            lines.push(`Token 出现在项目文件里：${scanned.hits.join(", ")}。请删掉后重新申请 Token。`);
             return { ok: false, lines, called };
         }
-        lines.push("项目目录里没有发现当前 Token。");
+        if (scanned.truncated) {
+            lines.push("目录比较大，已跳过 node_modules 等依赖目录，查到上限就停。已查看的文件里没有当前 Token。");
+        }
+        else if (configHome && (pathInside(workspace, configHome) || pathInside(configHome, workspace))) {
+            lines.push("项目目录里没有发现当前 Token。本机配置目录不算泄露。");
+        }
+        else {
+            lines.push("项目目录里没有发现当前 Token。");
+        }
     }
     let tools;
     try {

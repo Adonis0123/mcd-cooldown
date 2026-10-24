@@ -144,6 +144,26 @@ test("idle statusline says the next meal when configured, otherwise init", () =>
     formatStatusline({ ...input, now: zonedInstant(2026, 10, 21, 19, 10, "Asia/Shanghai") }),
     "mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒",
   );
+  const saturday = zonedInstant(2026, 10, 24, 9, 30, "Asia/Shanghai");
+  assert.equal(
+    formatStatusline({ ...input, now: saturday }),
+    "mcd · 已就绪 · 下一顿 周一 12:00 · 常点 鸡薯双全盒",
+  );
+  assert.equal(formatStatusline({ ...input, now: saturday }).includes("\n"), false);
+  const weekendsOn = structuredClone(ready);
+  weekendsOn.meals.weekends = true;
+  assert.equal(
+    formatStatusline({ ...input, config: weekendsOn, now: saturday }),
+    "mcd · 已就绪 · 午饭 12:00 · 常点 鸡薯双全盒",
+  );
+  assert.equal(
+    formatStatusline({ ...input, now: zonedInstant(2026, 10, 23, 20, 0, "Asia/Shanghai") }),
+    "mcd · 已就绪 · 下一顿 周一 12:00 · 常点 鸡薯双全盒",
+  );
+  assert.equal(
+    formatStatusline({ ...input, now: zonedInstant(2026, 10, 25, 11, 0, "Asia/Shanghai") }),
+    "mcd · 已就绪 · 下一顿 周一 12:00 · 常点 鸡薯双全盒",
+  );
   const quiet = formatStatusline({ ...input, now: zonedInstant(2026, 10, 21, 23, 30, "Asia/Shanghai") });
   assert.match(quiet, /先休息/);
   assert.equal(quiet.includes("已就绪"), false);

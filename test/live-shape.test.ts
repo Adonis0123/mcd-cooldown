@@ -164,7 +164,8 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
   assert.equal(plan.pendingId, null);
   assert.equal(plan.quoteCents, null);
   assert.equal(plan.note, beforeNextMealHint(afternoon, config.meals));
-  assert.match(plan.note, /下一顿正餐还没开卖，午饭 12:00 前会提前核价/);
+  assert.match(plan.note, /下一顿正餐还没开卖，周一 12:00 前会提前核价/);
+  assert.equal(plan.note.includes("午饭 12:00"), false);
   assert.equal((plan.note.match(/核价/g) ?? []).length, 1);
   assert.equal(plan.note.includes("确认"), false);
   assert.equal(plan.note.includes("doctor"), false);
@@ -185,7 +186,7 @@ test("unavailable usual items become a plain sentence on plan, hook, and confirm
     prepare: true,
   });
   assert.match(hook, /额度约 1 小时后恢复，起来活动一下/);
-  assert.match(hook, /下一顿正餐还没开卖，午饭 12:00 前会提前核价。程序没有下单/);
+  assert.match(hook, /下一顿正餐还没开卖，周一 12:00 前会提前核价。程序没有下单/);
   assert.equal((hook.match(/核价/g) ?? []).length, 1);
   assert.equal(hook.includes("确认"), false);
   assert.equal(hook.includes("现在只是核价"), false);

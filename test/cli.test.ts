@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -549,6 +549,86 @@ test("idle statusline names the next meal without calling the network", async ()
   assert.match(missing.stdout, /还没选门店和常点/);
   assert.match(missing.stdout, /node /);
   assert.match(missing.stdout, /cli\.js init/);
+});
+
+test("doctor run from home ignores its own token file and still flags a project file", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-doctor-home-"));
+  const token = "home-doctor-token-0123456789";
+  const env = { ...process.env, HOME: home, MCD_HOME: "", MCD_MCP_TOKEN: "" };
+  const saved = await run(["token"], env, `${token}\n`, home);
+  assert.equal(saved.code, 0, saved.stderr);
+  assert.match(saved.stdout, /已写入/);
+  assert.equal(saved.stdout.includes(token), false);
+  assert.equal(existsSync(join(home, ".mcd-cooldown", "token")), true);
+
+  const doctor = await run(["doctor", "--mock"], env, undefined, home);
+  const doctorText = `${doctor.stdout}\n${doctor.stderr}`;
+  assert.equal(doctor.code, 0, doctorText);
+  assert.match(doctor.stdout, /本机配置目录不算泄露/);
+  assert.match(doctor.stdout, /只读自检完成/);
+  assert.equal(doctorText.includes("请删掉"), false);
+  assert.equal(doctorText.includes(".mcd-cooldown/token"), false);
+  assert.equal(doctorText.includes(token), false);
+
+  const project = mkdtempSync(join(tmpdir(), "mcd-doctor-proj-"));
+  const clean = await run(["doctor", "--mock"], env, undefined, project);
+  assert.equal(clean.code, 0, clean.stderr);
+  assert.match(clean.stdout, /项目目录里没有发现当前 Token/);
+  assert.equal(clean.stdout.includes("本机配置目录不算泄露"), false);
+
+  writeFileSync(join(project, "secret.txt"), `token = ${token}\n`);
+  const leaked = await run(["doctor", "--mock"], env, undefined, project);
+  assert.notEqual(leaked.code, 0);
+  assert.match(leaked.stdout, /secret\.txt/);
+  assert.match(leaked.stderr, /doctor 未通过/);
+  assert.equal(`${leaked.stdout}\n${leaked.stderr}`.includes(token), false);
+
+  writeFileSync(join(home, "notes.txt"), token);
+  const homeLeak = await run(["doctor", "--mock"], env, undefined, home);
+  assert.notEqual(homeLeak.code, 0);
+  assert.match(homeLeak.stdout, /notes\.txt/);
+  assert.equal(homeLeak.stdout.includes(".mcd-cooldown"), false);
+
+  unlinkSync(join(home, "notes.txt"));
+  mkdirSync(join(home, "node_modules", "pkg"), { recursive: true });
+  writeFileSync(join(home, "node_modules", "pkg", "leak.js"), token);
+  mkdirSync(join(home, ".cache"));
+  writeFileSync(join(home, ".cache", "leak.txt"), token);
+  const skipped = await run(["doctor", "--mock"], env, undefined, home);
+  assert.equal(skipped.code, 0, `${skipped.stdout}\n${skipped.stderr}`);
+  assert.equal(skipped.stdout.includes("leak.js"), false);
+  assert.equal(skipped.stdout.includes("请删掉"), false);
+});
+
+test("saturday statusline, plan, and init name Monday when weekends stay off", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcd-sat-"));
+  writeFileSync(
+    join(home, "config.json"),
+    JSON.stringify({
+      meals: { enabled: true, timezone: "Asia/Shanghai", weekends: false, lunch: "12:00", dinner: "18:30", prepMinutes: 20, lingerMinutes: 45, notify: false },
+      store: { storeCode: "1400123", beType: 1, orderType: 1, takeWayCode: "eat-in" },
+      usual: { label: "鸡薯双全盒", items: [{ productCode: "BREAKFAST-ONLY", quantity: 1 }] },
+    }),
+  );
+  const env = { ...process.env, MCD_HOME: home, MCD_MCP_TOKEN: "", MCD_NOW: "2026-10-24T01:00:00.000Z" };
+  const line = await run(["statusline"], env, "{}\n");
+  assert.equal(line.code, 0, line.stderr);
+  assert.equal(line.stdout, "mcd · 已就绪 · 下一顿 周一 12:00 · 常点 鸡薯双全盒\n");
+  assert.equal(line.stdout.trim().includes("\n"), false);
+
+  const plan = await run(["plan", "--mock"], env);
+  assert.equal(plan.code, 0, plan.stderr);
+  assert.match(plan.stdout, /下一顿正餐还没开卖，周一 12:00 前会提前核价/);
+  assert.equal(plan.stdout.includes("午饭 12:00"), false);
+
+  const initHome = mkdtempSync(join(tmpdir(), "mcd-sat-init-"));
+  const wrote = await run(
+    ["init", "--mock", "--city", "示例市", "--keyword", "示例路", "--store", "1", "--item", "1"],
+    { ...env, HOME: initHome, MCD_HOME: join(initHome, "mcd") },
+  );
+  assert.equal(wrote.code, 0, wrote.stderr);
+  assert.match(wrote.stdout, /菜单按下一个饭点 2026-10-26 12:00 查询/);
+  assert.equal(wrote.stdout.includes("2026-10-24"), false);
 });
 
 test("help leads with the three steps, and bin hints differ from node hints", async () => {

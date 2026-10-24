@@ -153,8 +153,12 @@ export function formatInitSummary(file, result) {
  * or re-run init, is wrong when nothing is waiting.
  */
 function notOnSaleLine(lead, nextLabel) {
-    const when = nextLabel ? `${nextLabel} 前会提前核价` : "饭点前会提前核价";
+    const when = nextLabel ? `${clockOf(nextLabel)} 前会提前核价` : "饭点前会提前核价";
     return `${lead}，${when}。`;
+}
+/** `下一顿 周一 12:00` still reads as `周一 12:00 前会提前核价` inside a longer sentence. */
+function clockOf(label) {
+    return label.startsWith("下一顿 ") ? label.slice("下一顿 ".length) : label;
 }
 export function breakfastHourHint(now, meals = defaultMeals()) {
     return notOnSaleLine("早餐时段正餐还没开卖", nextMealLabel(now, meals));
@@ -163,13 +167,15 @@ export function breakfastHourHint(now, meals = defaultMeals()) {
 export function beforeNextMealHint(now, meals = defaultMeals()) {
     return notOnSaleLine("下一顿正餐还没开卖", nextMealLabel(now, meals));
 }
+const WEEKDAY_LABEL = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 /**
  * Next lunch or dinner, strictly after `now`, as `yyyy-MM-dd HH:mm`.
  * Init has no saved config yet, so the clocks default to 12:00 and 18:30.
+ * Weekends default off, so Saturday and Sunday aim at the next weekday meal.
  * A past reservationDate is rejected by the upstream menu API.
  */
-export function nextMealReservationDate(now, timeZone = defaultMeals().timezone, lunch = defaultMeals().lunch, dinner = defaultMeals().dinner) {
-    const best = upcomingMeal(now, timeZone, lunch, dinner);
+export function nextMealReservationDate(now, timeZone = defaultMeals().timezone, lunch = defaultMeals().lunch, dinner = defaultMeals().dinner, weekends = defaultMeals().weekends) {
+    const best = upcomingMeal(now, timeZone, lunch, dinner, weekends);
     if (!best)
         throw new UserError("算不出下一个午饭或晚饭时间。没有写入配置，也没有下单。");
     const zoned = zonedParts(best.at, timeZone);
@@ -183,24 +189,40 @@ export function nextMealReservationDate(now, timeZone = defaultMeals().timezone,
 export function unavailableMealHint(now, meals = defaultMeals()) {
     if (inOrNearMealWindow(now, meals))
         return MEAL_UNAVAILABLE_HINT;
-    const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner);
+    const weekends = meals.weekends === true;
+    const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner, weekends);
     if (next?.slot === "lunch" && zonedParts(now, meals.timezone).ymd === zonedParts(next.at, meals.timezone).ymd) {
         return breakfastHourHint(now, meals);
     }
     return beforeNextMealHint(now, meals);
 }
-/** Next lunch or dinner strictly after `now`, as `午饭 12:00`. Null when the clocks cannot be parsed. */
+/**
+ * Next lunch or dinner strictly after `now`.
+ * Same day, or the next calendar day when weekends are open, stays `午饭 12:00`.
+ * When weekends are closed and the gap skips Saturday or Sunday, name that day: `下一顿 周一 12:00`.
+ * Null when the clocks cannot be parsed.
+ */
 export function nextMealLabel(now, meals = defaultMeals()) {
-    const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner);
+    const weekends = meals.weekends === true;
+    const next = upcomingMeal(now, meals.timezone, meals.lunch, meals.dinner, weekends);
     if (!next)
         return null;
     const hm = next.slot === "lunch" ? meals.lunch : meals.dinner;
-    return `${next.slot === "lunch" ? "午饭" : "晚饭"} ${hm}`;
+    const today = zonedParts(now, meals.timezone);
+    const when = zonedParts(next.at, meals.timezone);
+    if (namesTheDay(today, when, weekends))
+        return `下一顿 ${WEEKDAY_LABEL[when.weekday]} ${hm}`;
+    const name = next.slot === "lunch" ? "午饭" : "晚饭";
+    return `${name} ${hm}`;
 }
-function upcomingMeal(now, timeZone, lunch, dinner) {
+function upcomingMeal(now, timeZone, lunch, dinner, weekends) {
     const parts = zonedParts(now, timeZone);
     let best = null;
-    for (let add = 0; add < 3; add += 1) {
+    // Friday night with weekends off lands on Monday, three calendar days ahead.
+    for (let add = 0; add < 4; add += 1) {
+        const weekday = (parts.weekday + add) % 7;
+        if (!weekends && (weekday === 0 || weekday === 6))
+            continue;
         const day = shiftDate(parts.year, parts.month, parts.day, add);
         for (const slot of ["lunch", "dinner"]) {
             const clock = parseHm(slot === "lunch" ? lunch : dinner);
@@ -215,9 +237,31 @@ function upcomingMeal(now, timeZone, lunch, dinner) {
     }
     return best;
 }
+function namesTheDay(today, next, weekends) {
+    if (weekends || next.ymd === today.ymd)
+        return false;
+    const delta = calendarDelta(today, next);
+    if (delta <= 0)
+        return false;
+    for (let i = 0; i < delta; i += 1) {
+        const weekday = (today.weekday + i) % 7;
+        if (weekday === 0 || weekday === 6)
+            return true;
+    }
+    return false;
+}
+function calendarDelta(from, to) {
+    const start = Date.UTC(from.year, from.month - 1, from.day);
+    const end = Date.UTC(to.year, to.month - 1, to.day);
+    return Math.round((end - start) / 86_400_000);
+}
 function inOrNearMealWindow(now, meals) {
     const parts = zonedParts(now, meals.timezone);
+    const weekends = meals.weekends === true;
     for (let add = -1; add <= 1; add += 1) {
+        const weekday = (parts.weekday + add + 7) % 7;
+        if (!weekends && (weekday === 0 || weekday === 6))
+            continue;
         const day = shiftDate(parts.year, parts.month, parts.day, add);
         for (const hm of [meals.lunch, meals.dinner]) {
             const clock = parseHm(hm);
