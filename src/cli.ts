@@ -153,6 +153,7 @@ async function main(): Promise<void> {
         warnings: ctx.warnings,
         config: ctx.config,
         workspace: process.cwd(),
+        configHome: ctx.home,
         city: flagString(parsed.flags, "city"),
         keyword: flagString(parsed.flags, "keyword"),
         mock,

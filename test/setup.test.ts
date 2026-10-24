@@ -17,6 +17,7 @@ import {
   formatMenuChoices,
   formatMenuListing,
   MENU_PREVIEW_LIMIT,
+  nextMealLabel,
   nextMealReservationDate,
   unavailableMealHint,
   breakfastHourHint,
@@ -364,7 +365,27 @@ test("morning init queries the next lunch menu and skips breakfast items", async
   assert.equal(nextMealReservationDate(noon), "2026-10-13 18:30");
   assert.equal(nextMealReservationDate(afternoon), "2026-10-13 18:30");
   assert.equal(nextMealReservationDate(evening), "2026-10-14 12:00");
+  assert.equal(nextMealLabel(morning), "午饭 12:00");
   assert.ok(zonedInstant(2026, 10, 13, 12, 0, "Asia/Shanghai").getTime() > morning.getTime());
+
+  const saturdayMorning = zonedInstant(2026, 10, 24, 9, 0, "Asia/Shanghai");
+  const saturdayAfternoon = zonedInstant(2026, 10, 24, 13, 0, "Asia/Shanghai");
+  const fridayNight = zonedInstant(2026, 10, 23, 20, 0, "Asia/Shanghai");
+  const sundayMorning = zonedInstant(2026, 10, 25, 10, 0, "Asia/Shanghai");
+  assert.equal(nextMealReservationDate(saturdayMorning), "2026-10-26 12:00");
+  assert.equal(nextMealReservationDate(saturdayAfternoon), "2026-10-26 12:00");
+  assert.equal(nextMealReservationDate(fridayNight), "2026-10-26 12:00");
+  assert.equal(nextMealReservationDate(sundayMorning), "2026-10-26 12:00");
+  assert.equal(nextMealLabel(saturdayMorning), "下一顿 周一 12:00");
+  assert.equal(nextMealLabel(saturdayAfternoon), "下一顿 周一 12:00");
+  assert.equal(nextMealReservationDate(saturdayMorning, "Asia/Shanghai", "12:00", "18:30", true), "2026-10-24 12:00");
+  assert.equal(nextMealReservationDate(saturdayAfternoon, "Asia/Shanghai", "12:00", "18:30", true), "2026-10-24 18:30");
+  assert.equal(nextMealLabel(saturdayMorning, { timezone: "Asia/Shanghai", lunch: "12:00", dinner: "18:30", weekends: true }), "午饭 12:00");
+  assert.equal(
+    unavailableMealHint(saturdayMorning),
+    "下一顿正餐还没开卖，周一 12:00 前会提前核价。",
+  );
+  assert.equal(unavailableMealHint(saturdayMorning).includes("午饭 12:00"), false);
 
   const picked = await runInit({
     caller: daypartCaller(),

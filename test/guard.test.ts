@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ import { runDoctor } from "../src/doctor.js";
 import { Guard } from "../src/guard.js";
 import { FixtureBackend } from "../src/mcp/fixtures.js";
 import type { ToolCaller, ToolResult } from "../src/mcp/types.js";
-import { findTokenInTree } from "../src/leak.js";
+import { findTokenInTree, scanForToken } from "../src/leak.js";
 import { writeFileSync } from "node:fs";
 import { HomeStore } from "../src/store.js";
 import { DEMO_RESET } from "../src/demo.js";
@@ -208,6 +208,81 @@ test("doctor fails when the token is sitting in the workspace", async () => {
   assert.equal(report.ok, false);
   assert.match(report.lines.join("\n"), /notes.txt/);
   assert.deepEqual(findTokenInTree(workspace, token), ["notes.txt"]);
+});
+
+test("doctor does not treat the config directory or dependency folders as a leak", async () => {
+  const token = "home-config-token-0123456789";
+  const root = mkdtempSync(join(tmpdir(), "mcd-home-scan-"));
+  const configHome = join(root, ".mcd-cooldown");
+  mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+  mkdirSync(configHome, { recursive: true });
+  mkdirSync(join(root, ".secret"));
+  mkdirSync(join(root, "proj"));
+  mkdirSync(join(root, "Library"));
+  writeFileSync(join(configHome, "token"), `${token}\n`);
+  writeFileSync(join(configHome, "config.json"), `{"note":"${token}"}\n`);
+  writeFileSync(join(root, "node_modules", "pkg", "index.js"), token);
+  writeFileSync(join(root, ".secret", "hidden.txt"), token);
+  writeFileSync(join(root, ".env"), `MCD_MCP_TOKEN=${token}\n`);
+  writeFileSync(join(root, "proj", "notes.txt"), `token = ${token}\n`);
+  writeFileSync(join(root, "Library", "notes.txt"), token);
+
+  const atHome = scanForToken(root, token, { ignore: [configHome], skipTopHiddenDirs: true });
+  assert.deepEqual(new Set(atHome.hits), new Set([".env", "proj/notes.txt"]));
+  assert.equal(atHome.truncated, false);
+  assert.equal(atHome.hits.some((hit) => hit.includes("node_modules") || hit.includes(".mcd-cooldown")), false);
+
+  const inProject = scanForToken(root, token, { ignore: [configHome] });
+  assert.equal(inProject.hits.includes("proj/notes.txt"), true);
+  assert.equal(inProject.hits.includes(".secret/hidden.txt"), true);
+  assert.equal(inProject.hits.some((hit) => hit.includes("node_modules") || hit.startsWith(".mcd-cooldown")), false);
+
+  const onlyDeps = mkdtempSync(join(tmpdir(), "mcd-deps-only-"));
+  mkdirSync(join(onlyDeps, "node_modules"), { recursive: true });
+  writeFileSync(join(onlyDeps, "node_modules", "leak.txt"), token);
+  assert.deepEqual(findTokenInTree(onlyDeps, token), []);
+
+  const capped = mkdtempSync(join(tmpdir(), "mcd-cap-"));
+  for (let i = 0; i < 5; i += 1) writeFileSync(join(capped, `f${i}.txt`), "plain\n");
+  const stopped = scanForToken(capped, token, { maxFiles: 2 });
+  assert.deepEqual(stopped.hits, []);
+  assert.equal(stopped.truncated, true);
+
+  const clean = await runDoctor({
+    caller: new FixtureBackend(),
+    token,
+    tokenSource: "本机 token 文件",
+    warnings: [],
+    config: defaultConfig(),
+    workspace: root,
+    configHome,
+    mock: true,
+  });
+  assert.equal(clean.ok, false);
+  assert.match(clean.lines.join("\n"), /proj\/notes\.txt/);
+  assert.equal(clean.lines.join("\n").includes(".mcd-cooldown"), false);
+  assert.equal(clean.lines.join("\n").includes("node_modules"), false);
+
+  const homeOnly = mkdtempSync(join(tmpdir(), "mcd-doctor-config-"));
+  const homeConfig = join(homeOnly, ".mcd-cooldown");
+  mkdirSync(homeConfig);
+  writeFileSync(join(homeConfig, "token"), `${token}\n`);
+  const passed = await runDoctor({
+    caller: new FixtureBackend(),
+    token,
+    tokenSource: "本机 token 文件",
+    warnings: [],
+    config: defaultConfig(),
+    workspace: homeOnly,
+    configHome: homeConfig,
+    mock: true,
+  });
+  assert.equal(passed.ok, true, passed.lines.join("\n"));
+  const passedText = passed.lines.join("\n");
+  assert.match(passedText, /本机配置目录不算泄露/);
+  assert.match(passedText, /只读自检完成/);
+  assert.equal(passedText.includes("请删掉"), false);
+  assert.equal(passedText.includes(token), false);
 });
 
 test("plan quotes a saved meal and does not create an order", async () => {
